@@ -31,6 +31,8 @@ const XLS_KEYS = [
   'emba','qtUnit','precoVenda','preco_emba','preco_emba_st',
   'preco_unit','preco_tot','preco_tot_ion','preco_tot_ion_st',
 ];
+// Colunas que mantêm o cabeçalho mas ficam vazias nos dados
+const XLS_COLS_VAZIAS = new Set(['emba', 'preco_unit', 'preco_tot']);
 
 const esc = s => String(s || '')
   .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -104,7 +106,7 @@ function gerarXls(pedido) {
   const wsData = [
     ['cnpj', pedido.cnpj_numerico],
     XLS_HEADERS,
-    ...pedido.itens.map(item => XLS_KEYS.map(k => item[k] || '')),
+    ...pedido.itens.map(item => XLS_KEYS.map(k => XLS_COLS_VAZIAS.has(k) ? '' : (item[k] || ''))),
   ];
   const ws = XLSX.utils.aoa_to_sheet(wsData);
   XLSX.utils.book_append_sheet(wb, ws, 'Planilha1');
