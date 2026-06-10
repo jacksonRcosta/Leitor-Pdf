@@ -1,0 +1,10 @@
+{
+  "name": "pdf-conversor",
+  "version": "1.0.0",
+  "description": "Conversor de pedidos PDF para XLS, XML e CSV",
+  "dependencies": {
+    "jszip": "^3.10.1",
+    "pdf-parse": "^1.1.1",
+    "xlsx": "^0.18.5"
+  }
+}
