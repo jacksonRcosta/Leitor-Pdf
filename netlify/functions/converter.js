@@ -8,13 +8,18 @@ const CORS = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-// ── Regex ─────────────────────────────────────────────────────────────────────
-const RE_RAZAO      = /RAZ[AÃ]O SOCIAL:\s*(.+?)\s+CNPJ:\s*(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2})\s+I\.E\.:\s*(\d+)\s+LOJA ENTREGA:\s*(\S+)/i;
-const RE_PEDIDO     = /N[ºO]\s*PEDIDO\s*[:\s]*(\d+)/i;
-const RE_COMPRA     = /DATA COMPRA:\s*(\d{2}\/\d{2}\/\d{4})/i;
-const RE_ENTREGA    = /DATA ENTREGA:\s*(\d{2}\/\d{2}\/\d{4})/i;
-const RE_VENC       = /VENCIMENTOS:\s*(\S+)/i;
-const RE_ITEM       = /^(\d{6})\s+(.+?)\s+(\d{13,14})\s+(\w+\/\d{4})\s+(\d{10,12})\s+(\d+)\s+([\d.]+,\d{2})\s+([\d.]+,\d{2})\s+([\d.]+,\d{2})\s+([\d.]+,\d{2})/;
+// ── Regex (formato pdf-parse — campos sem espaço) ─────────────────────────────
+// Header: "BARROS COMERCIO LTDA 0009RAZÃO SOCIAL:CNPJ:10.840.716/0009-08I.E.:240332490"
+const RE_RAZAO   = /^(.+?)RAZ[ÃA]O SOCIAL:CNPJ:(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2})I\.E\.:(\d+)/;
+// Loja em linha separada: "LOJA ENTREGA:LJ09 - SUP.SAO"
+const RE_LOJA    = /LOJA ENTREGA:(\w+)/;
+// Pedido na linha do fornecedor: "...N° PEDIDO:172409"
+const RE_PEDIDO  = /PEDIDO[:\s]*(\d+)/i;
+const RE_COMPRA  = /DATA COMPRA:(\d{2}\/\d{2}\/\d{4})/;
+const RE_ENTREGA = /DATA ENTREGA:(\d{2}\/\d{2}\/\d{4})/;
+const RE_VENC    = /VENCIMENTOS:(\S+)/;
+// Item: cod(6) + desc + emb(2L/4D) + externo(10-12D) + custo + frete + total + qtde + EAN(13D) + disc
+const RE_ITEM    = /^(\d{6})(.+?)([A-Z]{2}\/\d{4})(\d{10,12})([\d.]+,\d{2})([\d.]+,\d{2})([\d.]+,\d{2})(\d+)(\d{13,14})([\d.]+,\d{2})/;
 
 const XLS_HEADERS = [
   'codproduto','codembalagem','quantidade','descricao',
@@ -38,6 +43,7 @@ function extrairPedidos(texto) {
   let atual = null;
 
   for (const linha of texto.split('\n')) {
+    // Detecta novo pedido pelo cabeçalho RAZÃO SOCIAL
     const mRazao = RE_RAZAO.exec(linha);
     if (mRazao) {
       if (atual && atual.itens.length) pedidos.push(atual);
@@ -47,7 +53,7 @@ function extrairPedidos(texto) {
         cnpj_formatado: fmt,
         cnpj_numerico:  cnpjNum(fmt),
         ie:             mRazao[3].trim(),
-        loja:           mRazao[4].trim(),
+        loja:           '',
         num_pedido:     '',
         data_compra:    '',
         data_entrega:   '',
@@ -57,30 +63,32 @@ function extrairPedidos(texto) {
     }
 
     if (atual) {
-      if (!atual.num_pedido)  { const m = RE_PEDIDO.exec(linha);  if (m) atual.num_pedido  = m[1]; }
+      if (!atual.loja)        { const m = RE_LOJA.exec(linha);    if (m) atual.loja         = m[1]; }
+      if (!atual.num_pedido)  { const m = RE_PEDIDO.exec(linha);  if (m) atual.num_pedido   = m[1]; }
       if (!atual.data_compra) { const m = RE_COMPRA.exec(linha);  if (m) atual.data_compra  = m[1]; }
       if (!atual.data_entrega){ const m = RE_ENTREGA.exec(linha); if (m) atual.data_entrega = m[1]; }
       if (!atual.vencimentos) { const m = RE_VENC.exec(linha);    if (m) atual.vencimentos  = m[1]; }
 
+      // Item: cod(6) desc emb externo custo frete total qtde EAN disc
       const mItem = RE_ITEM.exec(linha);
       if (mItem) {
         atual.itens.push({
-          codproduto:      mItem[1],
-          descricao:       mItem[2].trim(),
-          codembalagem:    mItem[3],
-          emba:            mItem[4],
-          externo:         mItem[5],
-          quantidade:      mItem[6],
-          precoVenda:      mItem[7],
-          frete:           mItem[8],
-          desconto:        mItem[9],
-          preco_tot:       mItem[10],
-          qtUnit:          '',
-          preco_emba:      '',
-          preco_emba_st:   '',
-          preco_unit:      mItem[7],
-          preco_tot_ion:   '',
-          preco_tot_ion_st:'',
+          codproduto:       mItem[1],
+          descricao:        mItem[2].trim(),
+          emba:             mItem[3],
+          externo:          mItem[4],
+          precoVenda:       mItem[5],
+          frete:            mItem[6],
+          preco_tot:        mItem[7],
+          quantidade:       mItem[8],
+          codembalagem:     mItem[9],
+          desconto:         mItem[10],
+          qtUnit:           '',
+          preco_emba:       '',
+          preco_emba_st:    '',
+          preco_unit:       mItem[5],
+          preco_tot_ion:    '',
+          preco_tot_ion_st: '',
         });
       }
     }
