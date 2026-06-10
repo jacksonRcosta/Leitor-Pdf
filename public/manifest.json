@@ -1,0 +1,24 @@
+{
+  "name": "Conversor de Pedidos | Asa Branca",
+  "short_name": "Conversor PDF",
+  "description": "Converte pedidos de compra em PDF para XLS, XML e CSV",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#2b3d6b",
+  "background_color": "#ffffff",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

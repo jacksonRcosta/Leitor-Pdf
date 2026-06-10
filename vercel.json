@@ -1,0 +1,14 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "functions": {
+    "api/converter.js": {
+      "maxDuration": 60,
+      "memory": 1024
+    }
+  },
+  "rewrites": [
+    { "source": "/.netlify/functions/converter", "destination": "/api/converter" },
+    { "source": "/((?!api/).*)", "destination": "/index.html" }
+  ]
+}

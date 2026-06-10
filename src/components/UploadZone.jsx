@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 
-const MAX_MB = 4
+const MAX_MB = 10
 
 export default function UploadZone({ onConvert, loading }) {
   const [file, setFile]       = useState(null)

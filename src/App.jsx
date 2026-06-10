@@ -56,7 +56,7 @@ export default function App() {
 
       if (!text?.trim()) {
         throw new Error(
-          res.status === 413 ? 'Arquivo muito grande. O limite é 4 MB.' :
+          res.status === 413 ? 'Arquivo muito grande. O limite é 10 MB.' :
           res.status === 504 || res.status === 524 ? 'Tempo de processamento excedido.' :
           `Sem resposta do servidor (HTTP ${res.status}).`
         )

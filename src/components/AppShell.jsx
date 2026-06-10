@@ -32,7 +32,7 @@ export default function AppShell({ appName = 'App', nav = [], topbarActions = nu
       {/* Sidebar desktop */}
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 flex-col border-r border-border bg-surface md:flex">
         <div className="flex h-14 items-center border-b border-border px-6">
-          <span className="text-lg font-semibold">{appName}</span>
+          <img src="/logo.png" alt="Asa Branca Distribuidora" className="h-7 w-auto" />
         </div>
         <div className="flex-1 overflow-y-auto py-4">
           <NavItems />
@@ -45,7 +45,7 @@ export default function AppShell({ appName = 'App', nav = [], topbarActions = nu
           <div className="absolute inset-0 bg-text/40" onClick={() => setMobileOpen(false)} aria-hidden />
           <aside className="absolute inset-y-0 left-0 flex w-64 flex-col bg-surface">
             <div className="flex h-14 items-center justify-between border-b border-border px-6">
-              <span className="text-lg font-semibold">{appName}</span>
+              <img src="/logo.png" alt="Asa Branca Distribuidora" className="h-7 w-auto" />
               <button
                 onClick={() => setMobileOpen(false)}
                 className="rounded-md p-1 text-text-muted hover:bg-border/50 hover:text-text focus-visible:ring-2 focus-visible:ring-primary"
