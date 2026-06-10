@@ -166,8 +166,9 @@ main > section {
   white-space: nowrap;
 }
 .btn-dl:hover { background: var(--bg); border-color: var(--primary); color: var(--primary); }
-.btn-dl.xls:hover { border-color: #057a55; color: #057a55; }
-.btn-dl.xml:hover { border-color: #b45309; color: #b45309; }
+.btn-dl.xls:hover      { border-color: #057a55; color: #057a55; }
+.btn-dl.xls-comp:hover { border-color: #1a56db; color: #1a56db; }
+.btn-dl.xml:hover      { border-color: #b45309; color: #b45309; }
 
 table {
   width: 100%;

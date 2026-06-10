@@ -31,8 +31,8 @@ const XLS_KEYS = [
   'emba','qtUnit','precoVenda','preco_emba','preco_emba_st',
   'preco_unit','preco_tot','preco_tot_ion','preco_tot_ion_st',
 ];
-// Colunas que mantêm o cabeçalho mas ficam vazias nos dados
-const XLS_COLS_VAZIAS = new Set(['emba', 'preco_unit', 'preco_tot']);
+// Colunas que mantêm o cabeçalho mas ficam vazias na versão padrão
+const XLS_COLS_VAZIAS = new Set(['codproduto', 'descricao', 'emba', 'preco_unit', 'preco_tot']);
 
 const esc = s => String(s || '')
   .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -101,17 +101,22 @@ function extrairPedidos(texto) {
 }
 
 // ── Geradores ─────────────────────────────────────────────────────────────────
-function gerarXls(pedido) {
+function _montarXls(pedido, completo) {
   const wb = XLSX.utils.book_new();
   const wsData = [
     ['cnpj', pedido.cnpj_numerico],
     XLS_HEADERS,
-    ...pedido.itens.map(item => XLS_KEYS.map(k => XLS_COLS_VAZIAS.has(k) ? '' : (item[k] || ''))),
+    ...pedido.itens.map(item =>
+      XLS_KEYS.map(k => (!completo && XLS_COLS_VAZIAS.has(k)) ? '' : (item[k] || ''))
+    ),
   ];
   const ws = XLSX.utils.aoa_to_sheet(wsData);
   XLSX.utils.book_append_sheet(wb, ws, 'Planilha1');
   return XLSX.write(wb, { type: 'buffer', bookType: 'xls' });
 }
+
+const gerarXls        = pedido => _montarXls(pedido, false);
+const gerarXlsCompleto = pedido => _montarXls(pedido, true);
 
 function gerarXml(pedido) {
   const now = new Date().toISOString().slice(0, 19);
@@ -177,24 +182,28 @@ exports.handler = async (event) => {
 
     const zip = new JSZip();
     const pedidosComArquivos = pedidos.map(p => {
-      const slug   = p.loja.replace(/[^\w]/g, '_');
-      const id     = p.num_pedido || slug;
-      const xlsBuf = gerarXls(p);
-      const xmlStr = gerarXml(p);
-      zip.file(`pedido_${id}_${slug}.xls`, xlsBuf);
-      zip.file(`pedido_${id}_${slug}.xml`, xmlStr);
+      const slug       = p.loja.replace(/[^\w]/g, '_');
+      const id         = p.num_pedido || slug;
+      const xlsBuf     = gerarXls(p);
+      const xlsCompBuf = gerarXlsCompleto(p);
+      const xmlStr     = gerarXml(p);
+      zip.file(`pedido_${id}_${slug}.xls`,          xlsBuf);
+      zip.file(`pedido_${id}_${slug}_completo.xls`, xlsCompBuf);
+      zip.file(`pedido_${id}_${slug}.xml`,          xmlStr);
       return {
-        loja:          p.loja,
-        razao_social:  p.razao_social,
-        num_pedido:    p.num_pedido,
-        cnpj:          p.cnpj_formatado,
-        total_itens:   p.itens.length,
-        data_compra:   p.data_compra,
-        data_entrega:  p.data_entrega,
-        xls_nome:      `pedido_${id}_${slug}.xls`,
-        xml_nome:      `pedido_${id}_${slug}.xml`,
-        xls:           Buffer.from(xlsBuf).toString('base64'),
-        xml:           Buffer.from(xmlStr, 'utf-8').toString('base64'),
+        loja:               p.loja,
+        razao_social:       p.razao_social,
+        num_pedido:         p.num_pedido,
+        cnpj:               p.cnpj_formatado,
+        total_itens:        p.itens.length,
+        data_compra:        p.data_compra,
+        data_entrega:       p.data_entrega,
+        xls_nome:           `pedido_${id}_${slug}.xls`,
+        xls_completo_nome:  `pedido_${id}_${slug}_completo.xls`,
+        xml_nome:           `pedido_${id}_${slug}.xml`,
+        xls:                Buffer.from(xlsBuf).toString('base64'),
+        xls_completo:       Buffer.from(xlsCompBuf).toString('base64'),
+        xml:                Buffer.from(xmlStr, 'utf-8').toString('base64'),
       };
     });
 

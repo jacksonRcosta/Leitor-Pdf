@@ -156,13 +156,17 @@ function renderResult(pedidos) {
       <td>${esc(p.data_entrega) || '—'}</td>
       <td>${p.total_itens}</td>
       <td class="download-cell">
-        <button class="btn-dl xls" title="Baixar XLS">XLS</button>
-        <button class="btn-dl xml" title="Baixar XML">XML</button>
+        <button class="btn-dl xls"      title="XLS padrão (campos selecionados vazios)">XLS</button>
+        <button class="btn-dl xls-comp" title="XLS completo (todos os campos preenchidos)">XLS+</button>
+        <button class="btn-dl xml"      title="Baixar XML">XML</button>
       </td>
     `;
-    const [btnXls, btnXml] = tr.querySelectorAll('.btn-dl');
+    const [btnXls, btnXlsComp, btnXml] = tr.querySelectorAll('.btn-dl');
     btnXls.addEventListener('click', () =>
       downloadBase64(p.xls, 'application/vnd.ms-excel', p.xls_nome)
+    );
+    btnXlsComp.addEventListener('click', () =>
+      downloadBase64(p.xls_completo, 'application/vnd.ms-excel', p.xls_completo_nome)
     );
     btnXml.addEventListener('click', () =>
       downloadBase64(p.xml, 'application/xml', p.xml_nome)
