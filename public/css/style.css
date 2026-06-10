@@ -138,6 +138,37 @@ main > section {
 }
 .result-header h2 { font-size: 1.15rem; color: var(--success); }
 
+.download-actions { display: flex; gap: .5rem; flex-wrap: wrap; }
+
+.btn-outline {
+  background: transparent;
+  color: var(--primary);
+  border: 1.5px solid var(--primary);
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+}
+.btn-outline:hover { background: #eff6ff; }
+.btn-outline svg, .btn-primary svg { width: 16px; height: 16px; }
+.btn-primary { display: inline-flex; align-items: center; gap: .35rem; }
+
+.download-cell { display: flex; gap: .35rem; }
+.btn-dl {
+  padding: .3rem .65rem;
+  font-size: .78rem;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1.5px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  transition: background .15s, border-color .15s;
+  white-space: nowrap;
+}
+.btn-dl:hover { background: var(--bg); border-color: var(--primary); color: var(--primary); }
+.btn-dl.xls:hover { border-color: #057a55; color: #057a55; }
+.btn-dl.xml:hover { border-color: #b45309; color: #b45309; }
+
 table {
   width: 100%;
   border-collapse: collapse;

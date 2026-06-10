@@ -2,26 +2,27 @@ const FUNCTION_URL = '/.netlify/functions/converter';
 const MAX_SIZE_MB  = 4;
 
 // ── Elementos ─────────────────────────────────────────────────────────────────
-const dropZone       = document.getElementById('drop-zone');
-const fileInput      = document.getElementById('file-input');
-const fileInfo       = document.getElementById('file-info');
-const fileName       = document.getElementById('file-name');
-const fileSize       = document.getElementById('file-size');
-const removeFile     = document.getElementById('remove-file');
-const convertBtn     = document.getElementById('convert-btn');
-const uploadSection  = document.getElementById('upload-section');
-const progressSection= document.getElementById('progress-section');
-const progressMsg    = document.getElementById('progress-msg');
-const resultSection  = document.getElementById('result-section');
-const resultTbody    = document.getElementById('result-tbody');
-const downloadAllBtn = document.getElementById('download-all-btn');
-const newConvBtn     = document.getElementById('new-conversion-btn');
-const errorSection   = document.getElementById('error-section');
-const errorMsg       = document.getElementById('error-msg');
-const retryBtn       = document.getElementById('retry-btn');
+const dropZone        = document.getElementById('drop-zone');
+const fileInput       = document.getElementById('file-input');
+const fileInfo        = document.getElementById('file-info');
+const fileName        = document.getElementById('file-name');
+const fileSize        = document.getElementById('file-size');
+const removeFile      = document.getElementById('remove-file');
+const convertBtn      = document.getElementById('convert-btn');
+const uploadSection   = document.getElementById('upload-section');
+const progressSection = document.getElementById('progress-section');
+const progressMsg     = document.getElementById('progress-msg');
+const resultSection   = document.getElementById('result-section');
+const resultTbody     = document.getElementById('result-tbody');
+const downloadCsvBtn  = document.getElementById('download-csv-btn');
+const downloadZipBtn  = document.getElementById('download-zip-btn');
+const newConvBtn      = document.getElementById('new-conversion-btn');
+const errorSection    = document.getElementById('error-section');
+const errorMsg        = document.getElementById('error-msg');
+const retryBtn        = document.getElementById('retry-btn');
 
-let selectedFile  = null;
-let zipBase64     = null;
+let selectedFile = null;
+let resultData   = null; // { zip, csv, csv_nome, pedidos[] }
 
 // ── Upload ────────────────────────────────────────────────────────────────────
 dropZone.addEventListener('click',    () => fileInput.click());
@@ -64,7 +65,7 @@ function formatSize(bytes) {
 
 function resetUpload() {
   selectedFile = null;
-  zipBase64    = null;
+  resultData   = null;
   fileInput.value = '';
   dropZone.classList.remove('hidden');
   fileInfo.classList.add('hidden');
@@ -120,7 +121,7 @@ convertBtn.addEventListener('click', async () => {
       throw new Error(data.erro || `Erro ${res.status}`);
     }
 
-    zipBase64 = data.zip;
+    resultData = data;
     renderResult(data.pedidos);
     showSection('result');
 
@@ -154,17 +155,34 @@ function renderResult(pedidos) {
       <td>${esc(p.data_compra) || '—'}</td>
       <td>${esc(p.data_entrega) || '—'}</td>
       <td>${p.total_itens}</td>
+      <td class="download-cell">
+        <button class="btn-dl xls" title="Baixar XLS">XLS</button>
+        <button class="btn-dl xml" title="Baixar XML">XML</button>
+      </td>
     `;
+    const [btnXls, btnXml] = tr.querySelectorAll('.btn-dl');
+    btnXls.addEventListener('click', () =>
+      downloadBase64(p.xls, 'application/vnd.ms-excel', p.xls_nome)
+    );
+    btnXml.addEventListener('click', () =>
+      downloadBase64(p.xml, 'application/xml', p.xml_nome)
+    );
     resultTbody.appendChild(tr);
   });
 }
 
-downloadAllBtn.addEventListener('click', () => {
-  if (!zipBase64) return;
-  const name = selectedFile
+// ── Botões globais ────────────────────────────────────────────────────────────
+downloadCsvBtn.addEventListener('click', () => {
+  if (!resultData) return;
+  downloadBase64(resultData.csv, 'text/csv', resultData.csv_nome);
+});
+
+downloadZipBtn.addEventListener('click', () => {
+  if (!resultData) return;
+  const nome = selectedFile
     ? selectedFile.name.replace(/\.pdf$/i, '') + '_convertido.zip'
     : 'pedidos_convertidos.zip';
-  downloadBase64(zipBase64, 'application/zip', name);
+  downloadBase64(resultData.zip, 'application/zip', nome);
 });
 
 newConvBtn.addEventListener('click', () => {
@@ -181,10 +199,10 @@ function showSection(name) {
   progressSection.classList.add('hidden');
   resultSection.classList.add('hidden');
   errorSection.classList.add('hidden');
-  if (name === 'upload')    uploadSection.classList.remove('hidden');
-  if (name === 'progress')  progressSection.classList.remove('hidden');
-  if (name === 'result')    resultSection.classList.remove('hidden');
-  if (name === 'error')     errorSection.classList.remove('hidden');
+  if (name === 'upload')   uploadSection.classList.remove('hidden');
+  if (name === 'progress') progressSection.classList.remove('hidden');
+  if (name === 'result')   resultSection.classList.remove('hidden');
+  if (name === 'error')    errorSection.classList.remove('hidden');
 }
 
 function showError(msg) {
@@ -208,5 +226,4 @@ function esc(str) {
   return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-// Exibir upload na carga inicial
 showSection('upload');

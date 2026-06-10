@@ -174,29 +174,38 @@ exports.handler = async (event) => {
     }
 
     const zip = new JSZip();
-    for (const p of pedidos) {
-      const slug = p.loja.replace(/[^\w]/g, '_');
-      const id   = p.num_pedido || slug;
-      zip.file(`pedido_${id}_${slug}.xls`, gerarXls(p));
-      zip.file(`pedido_${id}_${slug}.xml`, gerarXml(p));
-    }
-    zip.file('pedidos_combinados.csv', gerarCsv(pedidos));
+    const pedidosComArquivos = pedidos.map(p => {
+      const slug   = p.loja.replace(/[^\w]/g, '_');
+      const id     = p.num_pedido || slug;
+      const xlsBuf = gerarXls(p);
+      const xmlStr = gerarXml(p);
+      zip.file(`pedido_${id}_${slug}.xls`, xlsBuf);
+      zip.file(`pedido_${id}_${slug}.xml`, xmlStr);
+      return {
+        loja:          p.loja,
+        razao_social:  p.razao_social,
+        num_pedido:    p.num_pedido,
+        cnpj:          p.cnpj_formatado,
+        total_itens:   p.itens.length,
+        data_compra:   p.data_compra,
+        data_entrega:  p.data_entrega,
+        xls_nome:      `pedido_${id}_${slug}.xls`,
+        xml_nome:      `pedido_${id}_${slug}.xml`,
+        xls:           Buffer.from(xlsBuf).toString('base64'),
+        xml:           Buffer.from(xmlStr, 'utf-8').toString('base64'),
+      };
+    });
+
+    const csvStr  = gerarCsv(pedidos);
+    zip.file('pedidos_combinados.csv', csvStr);
 
     const zipB64 = await zip.generateAsync({ type: 'base64' });
-    const resumo = pedidos.map(p => ({
-      loja:          p.loja,
-      razao_social:  p.razao_social,
-      num_pedido:    p.num_pedido,
-      cnpj:          p.cnpj_formatado,
-      total_itens:   p.itens.length,
-      data_compra:   p.data_compra,
-      data_entrega:  p.data_entrega,
-    }));
+    const csvB64 = Buffer.from(csvStr, 'utf-8').toString('base64');
 
     return {
       statusCode: 200,
       headers: { ...CORS, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ zip: zipB64, pedidos: resumo }),
+      body: JSON.stringify({ zip: zipB64, csv: csvB64, csv_nome: 'pedidos_combinados.csv', pedidos: pedidosComArquivos }),
     };
 
   } catch (err) {
