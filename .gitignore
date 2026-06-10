@@ -12,3 +12,5 @@ dist/
 Thumbs.db
 
 .vercel
+debug-*.mjs
+debug-*.txt
