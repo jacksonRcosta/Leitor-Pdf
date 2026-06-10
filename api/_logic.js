@@ -14,9 +14,8 @@ const XLS_KEYS = [
   'preco_unit', 'preco_tot', 'preco_tot_ion', 'preco_tot_ion_st',
 ]
 
-// Colunas deixadas em branco na versão XLS padrão, por tipo de documento
-const COLS_VAZIAS_PEDIDO  = new Set(['codproduto', 'descricao', 'emba', 'preco_unit', 'preco_tot'])
-const COLS_VAZIAS_RUPTURA = new Set(['emba', 'qtUnit', 'precoVenda', 'preco_emba', 'preco_emba_st', 'preco_unit', 'preco_tot', 'preco_tot_ion', 'preco_tot_ion_st'])
+// Colunas deixadas em branco na versão XLS padrão (ambos os formatos usam o mesmo layout)
+const COLS_VAZIAS_PEDIDO = new Set(['codproduto', 'descricao', 'emba', 'preco_unit', 'preco_tot'])
 
 // ── Utilitários ───────────────────────────────────────────────────────────────
 const esc     = s => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
@@ -104,12 +103,10 @@ function extrairPedidos(texto) {
 // O pdf-parse extrai o texto das tabelas SEM espaços entre colunas. Formato real:
 //   "016335 - 01 | CENCOSUD BRASIL ATACADO LTDA.09182947000488090002 - MIOJO...7891079000434000698 - HUMBERTO TEOTONIO DE FIGUEIREDO15009/06/202611/02/2026"
 //
-// Âncoras fixas: CNPJ(14d) sem espaço após razão social; EAN(13d) sem espaço
-// após descrição; datas coladas à quantidade e entre si no final da linha.
-//
-// Agrupamento: um "pedido" por CNPJ único — múltiplas linhas com o mesmo CNPJ
-// são consolidadas em um único conjunto de arquivos (XLS/XML).
-const RE_RUPTURA = /^(\d{6}) - (\d{2}) \| (.+?)(\d{14})(\d{6}) - (.+?)(\d{13})(\d{6}) - (.+?)(\d+)(\d{2}\/\d{2}\/\d{4})(\d{2}\/\d{2}\/\d{4})$/
+// Named capture groups eliminam qualquer risco de off-by-one no destructuring.
+// Grupos: codloja(6d) filial(2d) razao cnpj(14d) codprod(6d) desc ean(13d)
+//         codvend(6d) vend qtd datarup datault
+const RE_RUPTURA = /^(?<codloja>\d{6}) - (?<filial>\d{2}) \| (?<razao>.+?)(?<cnpj>\d{14})(?<codprod>\d{6}) - (?<desc>.+?)(?<ean>\d{13})(?<codvend>\d{6}) - (?<vend>.+?)(?<qtd>\d+)(?<datarup>\d{2}\/\d{2}\/\d{4})(?<datault>\d{2}\/\d{2}\/\d{4})$/
 
 function extrairRupturaPrePedido(texto) {
   const mapa = new Map() // CNPJ → pedido
@@ -118,16 +115,16 @@ function extrairRupturaPrePedido(texto) {
     const m = RE_RUPTURA.exec(linha.trim())
     if (!m) continue
 
-    const [, codloja, filial, razaoSocial, cnpj, codprod, descProd, ean, qtd, dataRuptura] = m
+    const { codloja, filial, razao, cnpj, codprod, desc, ean, qtd, datarup } = m.groups
 
     if (!mapa.has(cnpj)) {
       mapa.set(cnpj, {
         loja:           `${codloja}-${filial}`,
-        razao_social:   razaoSocial.trim(),
+        razao_social:   razao.trim(),
         cnpj_formatado: fmtCNPJ(cnpj),
         cnpj_numerico:  cnpj,
         num_pedido:     '',
-        data_compra:    dataRuptura,
+        data_compra:    datarup,
         data_entrega:   '',
         vencimentos:    '',
         itens:          [],
@@ -136,7 +133,7 @@ function extrairRupturaPrePedido(texto) {
 
     mapa.get(cnpj).itens.push({
       codproduto:       codprod,
-      descricao:        descProd.trim().replace(/\s{2,}/g, ' '),
+      descricao:        desc.trim().replace(/\s{2,}/g, ' '),
       codembalagem:     ean,
       emba:             '',
       quantidade:       qtd,
@@ -243,7 +240,7 @@ export async function runConverter(body) {
 
   if (!pedidos.length) throw Object.assign(new Error('Nenhum pedido encontrado no PDF'), { status: 422 })
 
-  const colsVazias = formato === 'ruptura' ? COLS_VAZIAS_RUPTURA : COLS_VAZIAS_PEDIDO
+  const colsVazias = COLS_VAZIAS_PEDIDO
 
   const zip = new JSZip()
   const pedidosComArquivos = pedidos.map(p => {
