@@ -77,14 +77,6 @@ export default function ResultTable({ data, fileName, onReset }) {
                     >
                       XLS+
                     </Button>
-                    <Button
-                      variant="outline" size="sm"
-                      className="h-7 px-2 text-xs border-warning/40 text-warning hover:bg-warning/5"
-                      onClick={() => downloadBase64(p.xml, 'application/xml', p.xml_nome)}
-                      title="Baixar XML"
-                    >
-                      XML
-                    </Button>
                   </div>
                 </TableCell>
               </TableRow>
