@@ -101,12 +101,15 @@ function extrairPedidos(texto) {
 }
 
 // ── Parser B: Ruptura Pré-Pedido ──────────────────────────────────────────────
-// Formato por linha de dados:
-//   CODLOJA(6d) - FILIAL(2d) | RAZÃO_SOCIAL CNPJ(14d) CODPROD(6d) - DESCRIÇÃO EAN(13d) CODVEND(6d) - VENDEDOR QTD DATA_RUPTURA DATA_ULT_COMPRA
+// O pdf-parse extrai o texto das tabelas SEM espaços entre colunas. Formato real:
+//   "016335 - 01 | CENCOSUD BRASIL ATACADO LTDA.09182947000488090002 - MIOJO...7891079000434000698 - HUMBERTO TEOTONIO DE FIGUEIREDO15009/06/202611/02/2026"
+//
+// Âncoras fixas: CNPJ(14d) sem espaço após razão social; EAN(13d) sem espaço
+// após descrição; datas coladas à quantidade e entre si no final da linha.
 //
 // Agrupamento: um "pedido" por CNPJ único — múltiplas linhas com o mesmo CNPJ
 // são consolidadas em um único conjunto de arquivos (XLS/XML).
-const RE_RUPTURA = /^(\d{6})\s*-\s*(\d{2})\s*\|\s*(.+?)\s+(\d{14})\s+(\d{6})\s*-\s*(.+?)\s+(\d{13,14})\s+\d{6}\s*-\s*.+?\s+(\d+)\s+(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s*$/
+const RE_RUPTURA = /^(\d{6}) - (\d{2}) \| (.+?)(\d{14})(\d{6}) - (.+?)(\d{13})(\d{6}) - (.+?)(\d+)(\d{2}\/\d{2}\/\d{4})(\d{2}\/\d{2}\/\d{4})$/
 
 function extrairRupturaPrePedido(texto) {
   const mapa = new Map() // CNPJ → pedido
@@ -133,7 +136,7 @@ function extrairRupturaPrePedido(texto) {
 
     mapa.get(cnpj).itens.push({
       codproduto:       codprod,
-      descricao:        descProd.trim(),
+      descricao:        descProd.trim().replace(/\s{2,}/g, ' '),
       codembalagem:     ean,
       emba:             '',
       quantidade:       qtd,
