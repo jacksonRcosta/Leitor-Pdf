@@ -234,73 +234,123 @@ function gerarCsv(pedidos) {
 }
 
 // ── Helpers para detecção de estrutura genérica ───────────────────────────────
+
 function padArr(arr, n) {
   const r = arr.slice(0, n)
   while (r.length < n) r.push('')
   return r
 }
 
-// Analisa as linhas do PDF e tenta identificar:
-//  - metadados (título, data, referência — linhas curtas no início)
-//  - cabeçalho de colunas
-//  - linhas de dados propriamente ditas
+// Remove prefixo monetário "R$" de valores — mantém apenas o número
+function limparCelula(v) {
+  return String(v ?? '').replace(/R\$\s*/gi, '').trim()
+}
+
+// Detecta se uma linha é cabeçalho: campos textuais, sem valores puramente numéricos
+function ehCabecalho(campos) {
+  return campos.length > 1 &&
+    campos.every(c => !/^[\d.,]+$/.test(c.trim())) &&
+    campos.some(c => c.trim().length > 1)
+}
+
+// ── Estratégia A: divisão por múltiplos espaços ───────────────────────────────
+function tentarMultiEspaco(linhasDados) {
+  const splitadas = linhasDados.map(l =>
+    l.split(/\s{2,}/).map(c => limparCelula(c)).filter(Boolean)
+  )
+  const freq = {}
+  splitadas.forEach(r => { if (r.length >= 2) freq[r.length] = (freq[r.length] || 0) + 1 })
+  if (!Object.keys(freq).length) return null
+
+  const nCols     = parseInt(Object.entries(freq).sort((a, b) => b[1] - a[1])[0][0])
+  const cobertura = (freq[nCols] || 0) / linhasDados.length
+  if (nCols < 2 || cobertura < 0.25) return null
+
+  const comCols   = splitadas.filter(r => r.length >= nCols - 1)
+  const iCab      = comCols.findIndex(ehCabecalho)
+  const cabecalho = iCab >= 0
+    ? padArr(comCols[iCab], nCols)
+    : Array.from({ length: nCols }, (_, i) => `Campo ${i + 1}`)
+  const dados     = comCols
+    .filter((_, i) => i !== iCab)
+    .map(r => padArr(r.map(limparCelula), nCols))
+
+  return { cabecalho, dados }
+}
+
+// ── Estratégia B: detecção de colunas por posição de caracteres ───────────────
+// Útil para relatórios de largura fixa onde colunas são alinhadas por espaços.
+function tentarPosicaoFixa(linhasDados) {
+  const comprMedio  = linhasDados.reduce((s, l) => s + l.length, 0) / (linhasDados.length || 1)
+  const linhasAlvo  = linhasDados.filter(l => l.length >= comprMedio * 0.5)
+  if (linhasAlvo.length < 3) return null
+
+  const maxLen = Math.max(...linhasAlvo.map(l => l.length))
+  const freq   = new Float32Array(maxLen)
+  for (const l of linhasAlvo)
+    for (let i = 0; i < l.length; i++)
+      if (l[i] === ' ') freq[i]++
+  for (let i = 0; i < maxLen; i++) freq[i] /= linhasAlvo.length
+
+  // Bordas de colunas: fim de uma região com ≥70% de espaços e largura ≥2
+  const bordas = []
+  let inGap = false, gapStart = 0
+  for (let i = 1; i < maxLen; i++) {
+    if (freq[i] >= 0.7 && !inGap) { inGap = true; gapStart = i }
+    else if (freq[i] < 0.7 && inGap) { if (i - gapStart >= 2) bordas.push(i); inGap = false }
+  }
+  if (bordas.length < 2) return null
+
+  const cortar = linha => {
+    const cols = []
+    let ini = 0
+    for (const b of bordas) { cols.push(limparCelula(linha.slice(ini, b))); ini = b }
+    cols.push(limparCelula(linha.slice(ini)))
+    return cols.filter(Boolean)
+  }
+
+  const nCols     = bordas.length + 1
+  const splitadas = linhasDados.map(cortar)
+  const iCab      = splitadas.findIndex(ehCabecalho)
+  const cabecalho = iCab >= 0
+    ? padArr(splitadas[iCab], nCols)
+    : Array.from({ length: nCols }, (_, i) => `Campo ${i + 1}`)
+  const dados     = splitadas
+    .filter((_, i) => i !== iCab)
+    .map(r => padArr(r, nCols))
+
+  return { cabecalho, dados }
+}
+
+// ── Orquestrador de detecção ──────────────────────────────────────────────────
 function detectarEstrutura(linhas) {
   const comprMedio = linhas.reduce((s, l) => s + l.length, 0) / (linhas.length || 1)
 
-  // Linhas iniciais mais curtas que 60% da média → metadados do relatório
+  // Primeiras linhas curtas (< 55% da média) → metadados do relatório
   let corte = 0
   for (let i = 0; i < Math.min(8, linhas.length); i++) {
-    if (linhas[i].length < comprMedio * 0.6) corte = i + 1
+    if (linhas[i].length < comprMedio * 0.55) corte = i + 1
     else break
   }
   const metadados   = linhas.slice(0, Math.max(1, corte))
   const linhasDados = linhas.slice(corte)
 
-  // Tenta separar colunas por múltiplos espaços (padrão comum em PDFs tabulares)
-  const splitadas = linhasDados.map(l =>
-    l.split(/\s{2,}/).map(c => c.trim()).filter(Boolean)
-  )
+  const resultado = tentarMultiEspaco(linhasDados) ?? tentarPosicaoFixa(linhasDados)
+  if (resultado) return { metadados, ...resultado }
 
-  // Frequência do número de colunas detectadas (≥ 2)
-  const freq = {}
-  splitadas.forEach(r => { if (r.length >= 2) freq[r.length] = (freq[r.length] || 0) + 1 })
-
-  const nCols = Object.keys(freq).length
-    ? parseInt(Object.entries(freq).sort((a, b) => b[1] - a[1])[0][0])
-    : 0
-
-  if (nCols >= 2) {
-    const comCols = splitadas.filter(r => r.length >= nCols - 1)
-
-    // Cabeçalho: primeira linha cujos campos são todos textuais (não começam com dígito)
-    const iCab = comCols.findIndex(
-      r => r.length >= nCols - 1 &&
-           r.every(c => !/^\d+([,./]\d+)?$/.test(c.trim())) &&
-           r.some(c => c.trim().length > 1)
-    )
-
-    const cabecalho = iCab >= 0
-      ? padArr(comCols[iCab], nCols)
-      : Array.from({ length: nCols }, (_, i) => `Campo ${i + 1}`)
-
-    const dados = comCols
-      .filter((_, i) => i !== iCab)
-      .map(r => padArr(r, nCols))
-
-    return { metadados, cabecalho, dados }
-  }
-
-  // Fallback: coluna única
+  // Fallback: coluna única preservando todo o conteúdo
   return {
     metadados,
     cabecalho: ['Conteúdo do Documento'],
-    dados: linhasDados.map(l => [l]),
+    dados: linhasDados.map(l => [limparCelula(l)]),
   }
 }
 
 // ── Saída genérica: qualquer PDF não reconhecido ──────────────────────────────
-// Detecta automaticamente a estrutura do documento (metadados, cabeçalho,
-// colunas de dados) e gera XLS/CSV no mesmo padrão dos demais formatos.
+// Estrutura idêntica ao layout de compra/ruptura:
+//   Linha 1 : info do documento  (equivalente à linha de CNPJ)
+//   Linha 2 : cabeçalho das colunas
+//   Linha 3+: dados
 async function gerarSaidaGenerica(text, nomeArquivo) {
   const nome   = sanitizarNome(nomeArquivo)
   const linhas = text.split('\n').map(l => l.trim()).filter(Boolean)
@@ -310,21 +360,15 @@ async function gerarSaidaGenerica(text, nomeArquivo) {
   const { metadados, cabecalho, dados } = detectarEstrutura(linhas)
   const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`
 
-  // ── XLS estruturado (mesmo padrão: info no topo → cabeçalho → dados) ─────
-  const wb = XLSX.utils.book_new()
+  // ── XLS ───────────────────────────────────────────────────────────────────
+  const wb     = XLSX.utils.book_new()
   const wsData = [
-    // Metadados do relatório (título, data, referência, etc.)
-    ...metadados.map(m => [m]),
-    // Linha em branco separadora
-    [],
-    // Cabeçalho das colunas
-    cabecalho,
-    // Linhas de dados
-    ...dados,
+    ['documento', metadados.join('  |  ')],   // linha info (como "cnpj" nos pedidos)
+    cabecalho,                                  // cabeçalho das colunas
+    ...dados,                                   // linhas de dados
   ]
   const ws = XLSX.utils.aoa_to_sheet(wsData)
 
-  // Ajuste automático de largura das colunas
   ws['!cols'] = cabecalho.map((h, ci) => ({
     wch: Math.min(60, Math.max(
       String(h ?? '').length + 2,
@@ -336,7 +380,7 @@ async function gerarSaidaGenerica(text, nomeArquivo) {
   const xlsBuf = XLSX.write(wb, { type: 'buffer', bookType: 'xls' })
   const xlsB64 = Buffer.from(xlsBuf).toString('base64')
 
-  // ── CSV (só as linhas de dados, com cabeçalho) ────────────────────────────
+  // ── CSV ───────────────────────────────────────────────────────────────────
   const csvContent = '﻿' + [
     cabecalho.map(q).join(';'),
     ...dados.map(r => r.map(q).join(';')),
@@ -350,13 +394,10 @@ async function gerarSaidaGenerica(text, nomeArquivo) {
   zip.file(csvNome, Buffer.from(csvContent, 'utf-8'))
   const zipB64 = await zip.generateAsync({ type: 'base64', compression: 'DEFLATE' })
 
-  const titulo    = metadados[0] ?? nome
-  const subtitulo = metadados[1] ?? ''
-
   return {
     pedidos: [{
-      loja:              (subtitulo || titulo).substring(0, 20).trim() || 'GERAL',
-      razao_social:      titulo.substring(0, 80),
+      loja:              (metadados[1] || metadados[0] || nome).substring(0, 20).trim() || 'GERAL',
+      razao_social:      (metadados[0] || nome).substring(0, 80),
       num_pedido:        '',
       cnpj:              '',
       total_itens:       dados.length,
