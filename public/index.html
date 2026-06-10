@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Conversor PDF → XLS / XML / CSV</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Conversor de Pedidos</h1>
+      <p class="subtitle">PDF → XLS · XML · CSV</p>
+    </header>
+
+    <main>
+      <!-- Upload -->
+      <section id="upload-section">
+        <div id="drop-zone" class="drop-zone" role="button" tabindex="0" aria-label="Área de upload de PDF">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+            <line x1="12" y1="18" x2="12" y2="12"/>
+            <polyline points="9 15 12 12 15 15"/>
+          </svg>
+          <p>Arraste o PDF aqui ou <span class="link">clique para selecionar</span></p>
+          <p class="hint">Apenas arquivos .pdf · Máx. 4 MB</p>
+          <input type="file" id="file-input" accept=".pdf" hidden />
+        </div>
+        <div id="file-info" class="file-info hidden">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+          </svg>
+          <div>
+            <span id="file-name"></span>
+            <span id="file-size" class="muted"></span>
+          </div>
+          <button id="remove-file" class="btn-icon" aria-label="Remover arquivo">✕</button>
+        </div>
+        <button id="convert-btn" class="btn btn-primary" disabled>Converter PDF</button>
+      </section>
+
+      <!-- Progresso -->
+      <section id="progress-section" class="hidden">
+        <div class="spinner"></div>
+        <p id="progress-msg">Processando PDF...</p>
+      </section>
+
+      <!-- Resultado -->
+      <section id="result-section" class="hidden">
+        <div class="result-header">
+          <h2>Conversão concluída</h2>
+          <button id="download-all-btn" class="btn btn-primary">
+            Baixar todos os arquivos (.zip)
+          </button>
+        </div>
+
+        <table id="result-table">
+          <thead>
+            <tr>
+              <th>Loja</th>
+              <th>Razão Social</th>
+              <th>Nº Pedido</th>
+              <th>Data Compra</th>
+              <th>Data Entrega</th>
+              <th>Itens</th>
+            </tr>
+          </thead>
+          <tbody id="result-tbody"></tbody>
+        </table>
+
+        <button id="new-conversion-btn" class="btn btn-secondary">Nova conversão</button>
+      </section>
+
+      <!-- Erro -->
+      <section id="error-section" class="hidden">
+        <div class="alert alert-error">
+          <strong>Erro:</strong> <span id="error-msg"></span>
+        </div>
+        <button id="retry-btn" class="btn btn-secondary">Tentar novamente</button>
+      </section>
+    </main>
+
+    <footer>
+      <p>Asa Branca Industrial · Conversão de Pedidos de Compra</p>
+    </footer>
+  </div>
+
+  <script src="js/app.js"></script>
+</body>
+</html>

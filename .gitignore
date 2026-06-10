@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+.venv
+venv/
+node_modules/
+.netlify/
+dist/
+*.egg-info/
+.DS_Store
+Thumbs.db
