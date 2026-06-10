@@ -233,48 +233,133 @@ function gerarCsv(pedidos) {
   return '﻿' + rows.join('\r\n')
 }
 
+// ── Helpers para detecção de estrutura genérica ───────────────────────────────
+function padArr(arr, n) {
+  const r = arr.slice(0, n)
+  while (r.length < n) r.push('')
+  return r
+}
+
+// Analisa as linhas do PDF e tenta identificar:
+//  - metadados (título, data, referência — linhas curtas no início)
+//  - cabeçalho de colunas
+//  - linhas de dados propriamente ditas
+function detectarEstrutura(linhas) {
+  const comprMedio = linhas.reduce((s, l) => s + l.length, 0) / (linhas.length || 1)
+
+  // Linhas iniciais mais curtas que 60% da média → metadados do relatório
+  let corte = 0
+  for (let i = 0; i < Math.min(8, linhas.length); i++) {
+    if (linhas[i].length < comprMedio * 0.6) corte = i + 1
+    else break
+  }
+  const metadados   = linhas.slice(0, Math.max(1, corte))
+  const linhasDados = linhas.slice(corte)
+
+  // Tenta separar colunas por múltiplos espaços (padrão comum em PDFs tabulares)
+  const splitadas = linhasDados.map(l =>
+    l.split(/\s{2,}/).map(c => c.trim()).filter(Boolean)
+  )
+
+  // Frequência do número de colunas detectadas (≥ 2)
+  const freq = {}
+  splitadas.forEach(r => { if (r.length >= 2) freq[r.length] = (freq[r.length] || 0) + 1 })
+
+  const nCols = Object.keys(freq).length
+    ? parseInt(Object.entries(freq).sort((a, b) => b[1] - a[1])[0][0])
+    : 0
+
+  if (nCols >= 2) {
+    const comCols = splitadas.filter(r => r.length >= nCols - 1)
+
+    // Cabeçalho: primeira linha cujos campos são todos textuais (não começam com dígito)
+    const iCab = comCols.findIndex(
+      r => r.length >= nCols - 1 &&
+           r.every(c => !/^\d+([,./]\d+)?$/.test(c.trim())) &&
+           r.some(c => c.trim().length > 1)
+    )
+
+    const cabecalho = iCab >= 0
+      ? padArr(comCols[iCab], nCols)
+      : Array.from({ length: nCols }, (_, i) => `Campo ${i + 1}`)
+
+    const dados = comCols
+      .filter((_, i) => i !== iCab)
+      .map(r => padArr(r, nCols))
+
+    return { metadados, cabecalho, dados }
+  }
+
+  // Fallback: coluna única
+  return {
+    metadados,
+    cabecalho: ['Conteúdo do Documento'],
+    dados: linhasDados.map(l => [l]),
+  }
+}
+
 // ── Saída genérica: qualquer PDF não reconhecido ──────────────────────────────
-// Exporta todas as linhas de texto extraídas pelo pdf-parse como XLS e CSV,
-// sem tentar interpretar a estrutura — preserva todos os campos do documento.
+// Detecta automaticamente a estrutura do documento (metadados, cabeçalho,
+// colunas de dados) e gera XLS/CSV no mesmo padrão dos demais formatos.
 async function gerarSaidaGenerica(text, nomeArquivo) {
+  const nome   = sanitizarNome(nomeArquivo)
   const linhas = text.split('\n').map(l => l.trim()).filter(Boolean)
+
   if (!linhas.length) throw Object.assign(new Error('Nenhum conteúdo legível encontrado no PDF.'), { status: 422 })
 
-  const nome = sanitizarNome(nomeArquivo)
-  const q    = v => `"${String(v ?? '').replace(/"/g, '""')}"`
+  const { metadados, cabecalho, dados } = detectarEstrutura(linhas)
+  const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`
 
-  // XLS: uma linha por linha de texto do PDF
-  const wb     = XLSX.utils.book_new()
+  // ── XLS estruturado (mesmo padrão: info no topo → cabeçalho → dados) ─────
+  const wb = XLSX.utils.book_new()
   const wsData = [
-    ['Linha', 'Conteúdo'],
-    ...linhas.map((l, i) => [i + 1, l]),
+    // Metadados do relatório (título, data, referência, etc.)
+    ...metadados.map(m => [m]),
+    // Linha em branco separadora
+    [],
+    // Cabeçalho das colunas
+    cabecalho,
+    // Linhas de dados
+    ...dados,
   ]
   const ws = XLSX.utils.aoa_to_sheet(wsData)
-  XLSX.utils.book_append_sheet(wb, ws, 'Conteudo')
+
+  // Ajuste automático de largura das colunas
+  ws['!cols'] = cabecalho.map((h, ci) => ({
+    wch: Math.min(60, Math.max(
+      String(h ?? '').length + 2,
+      ...dados.map(r => String(r[ci] ?? '').length)
+    ))
+  }))
+
+  XLSX.utils.book_append_sheet(wb, ws, 'Dados')
   const xlsBuf = XLSX.write(wb, { type: 'buffer', bookType: 'xls' })
   const xlsB64 = Buffer.from(xlsBuf).toString('base64')
 
-  // CSV
+  // ── CSV (só as linhas de dados, com cabeçalho) ────────────────────────────
   const csvContent = '﻿' + [
-    ['linha', 'conteudo'].map(q).join(';'),
-    ...linhas.map((l, i) => [i + 1, l].map(q).join(';')),
+    cabecalho.map(q).join(';'),
+    ...dados.map(r => r.map(q).join(';')),
   ].join('\r\n')
-  const csvB64 = Buffer.from(csvContent, 'utf-8').toString('base64')
+  const csvB64  = Buffer.from(csvContent, 'utf-8').toString('base64')
   const csvNome = `${nome}.csv`
 
-  // ZIP
+  // ── ZIP ───────────────────────────────────────────────────────────────────
   const zip = new JSZip()
   zip.file(`${nome}.xls`, xlsBuf)
   zip.file(csvNome, Buffer.from(csvContent, 'utf-8'))
   const zipB64 = await zip.generateAsync({ type: 'base64', compression: 'DEFLATE' })
 
+  const titulo    = metadados[0] ?? nome
+  const subtitulo = metadados[1] ?? ''
+
   return {
     pedidos: [{
-      loja:              'GERAL',
-      razao_social:      linhas[0].substring(0, 80),
+      loja:              (subtitulo || titulo).substring(0, 20).trim() || 'GERAL',
+      razao_social:      titulo.substring(0, 80),
       num_pedido:        '',
       cnpj:              '',
-      total_itens:       linhas.length,
+      total_itens:       dados.length,
       data_compra:       '',
       data_entrega:      '',
       xls_nome:          `${nome}.xls`,
