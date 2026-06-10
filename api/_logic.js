@@ -2,7 +2,38 @@ import pdfParse from 'pdf-parse'
 import XLSX from 'xlsx'
 import JSZip from 'jszip'
 
-// ── Regex (formato pdf-parse — campos sem espaço) ─────────────────────────────
+// ── Layout 5 — ArquivoImportado ───────────────────────────────────────────────
+const XLS_HEADERS = [
+  'codproduto', 'codembalagem', 'quantidade', 'descricao',
+  'emba', 'qtUnit', 'precoVenda', 'preço emba', 'preço emba st',
+  'preço unit', 'preço tot', 'preco tot ion', 'preco tot ion st',
+]
+const XLS_KEYS = [
+  'codproduto', 'codembalagem', 'quantidade', 'descricao',
+  'emba', 'qtUnit', 'precoVenda', 'preco_emba', 'preco_emba_st',
+  'preco_unit', 'preco_tot', 'preco_tot_ion', 'preco_tot_ion_st',
+]
+
+// Colunas deixadas em branco na versão XLS padrão, por tipo de documento
+const COLS_VAZIAS_PEDIDO  = new Set(['codproduto', 'descricao', 'emba', 'preco_unit', 'preco_tot'])
+const COLS_VAZIAS_RUPTURA = new Set(['emba', 'qtUnit', 'precoVenda', 'preco_emba', 'preco_emba_st', 'preco_unit', 'preco_tot', 'preco_tot_ion', 'preco_tot_ion_st'])
+
+// ── Utilitários ───────────────────────────────────────────────────────────────
+const esc     = s => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
+const cnpjNum = s => s.replace(/\D/g, '')
+const fmtCNPJ = c => /^\d{14}$/.test(c)
+  ? c.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5')
+  : c
+
+// ── Detecção de formato ───────────────────────────────────────────────────────
+function detectarFormato(text) {
+  if (/ruptura\s*[-–]?\s*pr[eé]/i.test(text)) return 'ruptura'
+  if (/RAZ[ÃA]O SOCIAL:CNPJ:/i.test(text))    return 'pedido'
+  return 'pedido'
+}
+
+// ── Parser A: Pedido de Compra ─────────────────────────────────────────────────
+// Regex para o formato original (campos colados, ex: "RAZÃO SOCIAL:CNPJ:10.840.716/0009-08I.E.:...")
 const RE_RAZAO   = /^(.+?)RAZ[ÃA]O SOCIAL:CNPJ:(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2})I\.E\.:(\d+)/
 const RE_LOJA    = /LOJA ENTREGA:(\w+)/
 const RE_PEDIDO  = /PEDIDO[:\s]*(\d+)/i
@@ -11,22 +42,6 @@ const RE_ENTREGA = /DATA ENTREGA:(\d{2}\/\d{2}\/\d{4})/
 const RE_VENC    = /VENCIMENTOS:(\S+)/
 const RE_ITEM    = /^(\d{6})(.+?)([A-Z]{2}\/\d{4})(\d{10,12})([\d.]+,\d{2})([\d.]+,\d{2})([\d.]+,\d{2})(\d+)(\d{13,14})([\d.]+,\d{2})/
 
-const XLS_HEADERS = [
-  'codproduto','codembalagem','quantidade','descricao',
-  'emba','qtUnit','precoVenda','preço emba','preço emba st',
-  'preço unit','preço tot','preco tot ion','preco tot ion st',
-]
-const XLS_KEYS = [
-  'codproduto','codembalagem','quantidade','descricao',
-  'emba','qtUnit','precoVenda','preco_emba','preco_emba_st',
-  'preco_unit','preco_tot','preco_tot_ion','preco_tot_ion_st',
-]
-const XLS_COLS_VAZIAS = new Set(['codproduto', 'descricao', 'emba', 'preco_unit', 'preco_tot'])
-
-const esc     = s => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
-const cnpjNum = s => s.replace(/\D/g, '')
-
-// ── Extração ──────────────────────────────────────────────────────────────────
 function extrairPedidos(texto) {
   const pedidos = []
   let atual = null
@@ -85,23 +100,71 @@ function extrairPedidos(texto) {
   return pedidos
 }
 
-// ── Geradores ─────────────────────────────────────────────────────────────────
-function _montarXls(pedido, completo) {
+// ── Parser B: Ruptura Pré-Pedido ──────────────────────────────────────────────
+// Formato por linha de dados:
+//   CODLOJA(6d) - FILIAL(2d) | RAZÃO_SOCIAL CNPJ(14d) CODPROD(6d) - DESCRIÇÃO EAN(13d) CODVEND(6d) - VENDEDOR QTD DATA_RUPTURA DATA_ULT_COMPRA
+//
+// Agrupamento: um "pedido" por CNPJ único — múltiplas linhas com o mesmo CNPJ
+// são consolidadas em um único conjunto de arquivos (XLS/XML).
+const RE_RUPTURA = /^(\d{6})\s*-\s*(\d{2})\s*\|\s*(.+?)\s+(\d{14})\s+(\d{6})\s*-\s*(.+?)\s+(\d{13,14})\s+\d{6}\s*-\s*.+?\s+(\d+)\s+(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s*$/
+
+function extrairRupturaPrePedido(texto) {
+  const mapa = new Map() // CNPJ → pedido
+
+  for (const linha of texto.split('\n')) {
+    const m = RE_RUPTURA.exec(linha.trim())
+    if (!m) continue
+
+    const [, codloja, filial, razaoSocial, cnpj, codprod, descProd, ean, qtd, dataRuptura] = m
+
+    if (!mapa.has(cnpj)) {
+      mapa.set(cnpj, {
+        loja:           `${codloja}-${filial}`,
+        razao_social:   razaoSocial.trim(),
+        cnpj_formatado: fmtCNPJ(cnpj),
+        cnpj_numerico:  cnpj,
+        num_pedido:     '',
+        data_compra:    dataRuptura,
+        data_entrega:   '',
+        vencimentos:    '',
+        itens:          [],
+      })
+    }
+
+    mapa.get(cnpj).itens.push({
+      codproduto:       codprod,
+      descricao:        descProd.trim(),
+      codembalagem:     ean,
+      emba:             '',
+      quantidade:       qtd,
+      qtUnit:           '',
+      precoVenda:       '',
+      preco_emba:       '',
+      preco_emba_st:    '',
+      preco_unit:       '',
+      preco_tot:        '',
+      preco_tot_ion:    '',
+      preco_tot_ion_st: '',
+    })
+  }
+
+  return [...mapa.values()].filter(p => p.itens.length > 0)
+}
+
+// ── Geradores (compartilhados) ────────────────────────────────────────────────
+function _montarXls(pedido, completo, colsVazias) {
   const wb = XLSX.utils.book_new()
   const wsData = [
     ['cnpj', pedido.cnpj_numerico],
     XLS_HEADERS,
     ...pedido.itens.map(item =>
-      XLS_KEYS.map(k => (!completo && XLS_COLS_VAZIAS.has(k)) ? '' : (item[k] || ''))
+      XLS_KEYS.map(k => (!completo && colsVazias.has(k)) ? '' : (item[k] || ''))
     ),
   ]
   const ws = XLSX.utils.aoa_to_sheet(wsData)
   XLSX.utils.book_append_sheet(wb, ws, 'Planilha1')
   return XLSX.write(wb, { type: 'buffer', bookType: 'xls' })
 }
-
-const gerarXls         = pedido => _montarXls(pedido, false)
-const gerarXlsCompleto = pedido => _montarXls(pedido, true)
 
 function gerarXml(pedido) {
   const now = new Date().toISOString().slice(0, 19)
@@ -143,9 +206,9 @@ function gerarXml(pedido) {
 function gerarCsv(pedidos) {
   const q = v => `"${String(v || '').replace(/"/g, '""')}"`
   const header = [
-    'loja','num_pedido','cnpj','razao_social','data_compra','data_entrega',
-    'vencimentos','codproduto','descricao','codembalagem','emba',
-    'quantidade','precoVenda','frete','desconto','preco_tot',
+    'loja', 'num_pedido', 'cnpj', 'razao_social', 'data_compra', 'data_entrega',
+    'vencimentos', 'codproduto', 'descricao', 'codembalagem', 'emba',
+    'quantidade', 'precoVenda', 'frete', 'desconto', 'preco_tot',
   ]
   const rows = [header.map(q).join(';')]
   for (const p of pedidos) {
@@ -154,8 +217,8 @@ function gerarCsv(pedidos) {
         p.loja, p.num_pedido, p.cnpj_formatado, p.razao_social,
         p.data_compra, p.data_entrega, p.vencimentos,
         item.codproduto, item.descricao, item.codembalagem,
-        item.emba, item.quantidade, item.precoVenda,
-        item.frete, item.desconto, item.preco_tot,
+        item.emba, item.quantidade, item.precoVenda || '',
+        item.frete || '', item.desconto || '', item.preco_tot || '',
       ].map(q).join(';'))
     }
   }
@@ -167,18 +230,24 @@ export async function runConverter(body) {
   const b64 = body?.pdf
   if (!b64) throw Object.assign(new Error('PDF não fornecido'), { status: 400 })
 
-  const pdfBuffer = Buffer.from(b64, 'base64')
-  const { text }  = await pdfParse(pdfBuffer)
-  const pedidos   = extrairPedidos(text)
+  const buffer   = Buffer.from(b64, 'base64')
+  const { text } = await pdfParse(buffer)
+  const formato  = detectarFormato(text)
+
+  const pedidos = formato === 'ruptura'
+    ? extrairRupturaPrePedido(text)
+    : extrairPedidos(text)
 
   if (!pedidos.length) throw Object.assign(new Error('Nenhum pedido encontrado no PDF'), { status: 422 })
+
+  const colsVazias = formato === 'ruptura' ? COLS_VAZIAS_RUPTURA : COLS_VAZIAS_PEDIDO
 
   const zip = new JSZip()
   const pedidosComArquivos = pedidos.map(p => {
     const slug       = p.loja.replace(/[^\w]/g, '_')
-    const id         = p.num_pedido || slug
-    const xlsBuf     = gerarXls(p)
-    const xlsCompBuf = gerarXlsCompleto(p)
+    const id         = p.num_pedido || p.cnpj_numerico || slug
+    const xlsBuf     = _montarXls(p, false, colsVazias)
+    const xlsCompBuf = _montarXls(p, true,  colsVazias)
     const xmlStr     = gerarXml(p)
 
     zip.file(`pedido_${id}_${slug}.xls`,          xlsBuf)
