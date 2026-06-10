@@ -38,14 +38,14 @@ export default function App() {
 
     try {
       const b64 = await fileToBase64(file)
-      setLoadingMsg('Processando pedidos…')
+      setLoadingMsg('Processando documento…')
 
       let res
       try {
         res = await fetch(FUNCTION_URL, {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ pdf: b64 }),
+          body:    JSON.stringify({ pdf: b64, nome: file.name }),
           signal:  controller.signal,
         })
       } finally {

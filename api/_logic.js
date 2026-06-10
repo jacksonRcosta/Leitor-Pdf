@@ -28,7 +28,15 @@ const fmtCNPJ = c => /^\d{14}$/.test(c)
 function detectarFormato(text) {
   if (/ruptura\s*[-–]?\s*pr[eé]/i.test(text)) return 'ruptura'
   if (/RAZ[ÃA]O SOCIAL:CNPJ:/i.test(text))    return 'pedido'
-  return 'pedido'
+  return 'generico'
+}
+
+// Sanitiza o nome do arquivo para uso seguro em nomes de arquivos gerados
+function sanitizarNome(nome) {
+  return (nome || 'documento')
+    .replace(/\.pdf$/i, '')
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .trim() || 'documento'
 }
 
 // ── Parser A: Pedido de Compra ─────────────────────────────────────────────────
@@ -225,6 +233,63 @@ function gerarCsv(pedidos) {
   return '﻿' + rows.join('\r\n')
 }
 
+// ── Saída genérica: qualquer PDF não reconhecido ──────────────────────────────
+// Exporta todas as linhas de texto extraídas pelo pdf-parse como XLS e CSV,
+// sem tentar interpretar a estrutura — preserva todos os campos do documento.
+async function gerarSaidaGenerica(text, nomeArquivo) {
+  const linhas = text.split('\n').map(l => l.trim()).filter(Boolean)
+  if (!linhas.length) throw Object.assign(new Error('Nenhum conteúdo legível encontrado no PDF.'), { status: 422 })
+
+  const nome = sanitizarNome(nomeArquivo)
+  const q    = v => `"${String(v ?? '').replace(/"/g, '""')}"`
+
+  // XLS: uma linha por linha de texto do PDF
+  const wb     = XLSX.utils.book_new()
+  const wsData = [
+    ['Linha', 'Conteúdo'],
+    ...linhas.map((l, i) => [i + 1, l]),
+  ]
+  const ws = XLSX.utils.aoa_to_sheet(wsData)
+  XLSX.utils.book_append_sheet(wb, ws, 'Conteudo')
+  const xlsBuf = XLSX.write(wb, { type: 'buffer', bookType: 'xls' })
+  const xlsB64 = Buffer.from(xlsBuf).toString('base64')
+
+  // CSV
+  const csvContent = '﻿' + [
+    ['linha', 'conteudo'].map(q).join(';'),
+    ...linhas.map((l, i) => [i + 1, l].map(q).join(';')),
+  ].join('\r\n')
+  const csvB64 = Buffer.from(csvContent, 'utf-8').toString('base64')
+  const csvNome = `${nome}.csv`
+
+  // ZIP
+  const zip = new JSZip()
+  zip.file(`${nome}.xls`, xlsBuf)
+  zip.file(csvNome, Buffer.from(csvContent, 'utf-8'))
+  const zipB64 = await zip.generateAsync({ type: 'base64', compression: 'DEFLATE' })
+
+  return {
+    pedidos: [{
+      loja:              'GERAL',
+      razao_social:      linhas[0].substring(0, 80),
+      num_pedido:        '',
+      cnpj:              '',
+      total_itens:       linhas.length,
+      data_compra:       '',
+      data_entrega:      '',
+      xls_nome:          `${nome}.xls`,
+      xls_completo_nome: `${nome}.xls`,
+      xml_nome:          '',
+      xls:               xlsB64,
+      xls_completo:      xlsB64,
+      xml:               '',
+    }],
+    zip:      zipB64,
+    csv:      csvB64,
+    csv_nome: csvNome,
+  }
+}
+
 // ── Ponto de entrada ──────────────────────────────────────────────────────────
 export async function runConverter(body) {
   const b64 = body?.pdf
@@ -233,6 +298,10 @@ export async function runConverter(body) {
   const buffer   = Buffer.from(b64, 'base64')
   const { text } = await pdfParse(buffer)
   const formato  = detectarFormato(text)
+  const nome     = sanitizarNome(body.nome)
+
+  // Formato não reconhecido → exporta todo o conteúdo como planilha genérica
+  if (formato === 'generico') return gerarSaidaGenerica(text, nome)
 
   const pedidos = formato === 'ruptura'
     ? extrairRupturaPrePedido(text)
