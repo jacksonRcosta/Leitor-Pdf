@@ -81,13 +81,40 @@ convertBtn.addEventListener('click', async () => {
     const b64 = await fileToBase64(selectedFile);
     progressMsg.textContent = 'Processando pedidos...';
 
-    const res = await fetch(FUNCTION_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pdf: b64 }),
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 55000);
 
-    const data = await res.json();
+    let res;
+    try {
+      res = await fetch(FUNCTION_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pdf: b64 }),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    const text = await res.text();
+
+    if (!text || !text.trim()) {
+      throw new Error(
+        res.status === 413
+          ? 'Arquivo muito grande. O limite é 4 MB.'
+          : res.status === 504 || res.status === 524
+          ? 'Tempo de processamento excedido. Tente com um PDF menor.'
+          : `Sem resposta do servidor (HTTP ${res.status}). Verifique o deploy da função.`
+      );
+    }
+
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      console.error('Resposta não-JSON:', text.slice(0, 300));
+      throw new Error('Resposta inválida do servidor. Verifique os logs da função no Netlify.');
+    }
 
     if (!res.ok) {
       throw new Error(data.erro || `Erro ${res.status}`);
@@ -98,7 +125,11 @@ convertBtn.addEventListener('click', async () => {
     showSection('result');
 
   } catch (err) {
-    showError(err.message || 'Erro inesperado. Tente novamente.');
+    if (err.name === 'AbortError') {
+      showError('Tempo limite atingido (55s). O PDF pode ser muito complexo ou grande.');
+    } else {
+      showError(err.message || 'Erro inesperado. Tente novamente.');
+    }
   }
 });
 
