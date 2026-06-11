@@ -3,10 +3,6 @@ import XLSX from 'xlsx'
 import JSZip from 'jszip'
 import { createCanvas } from 'canvas'
 import Tesseract from 'tesseract.js'
-import pdfjsLib from 'pdfjs-dist/legacy/build/pdf.js'
-
-// Worker vazio = pdfjs roda no thread principal (modo inline, compatível com serverless)
-pdfjsLib.GlobalWorkerOptions.workerSrc = ''
 
 // ── Layout 5 — ArquivoImportado ───────────────────────────────────────────────
 const XLS_HEADERS = [
@@ -859,27 +855,38 @@ async function gerarSaidaGenerica(text, paginas, nomeArquivo) {
   }
 }
 
-// ── OCR: renderiza páginas e extrai texto via Tesseract ──────────────────────
-// Usado quando o PDF não possui camada de texto (imagem convertida para PDF).
+// ── OCR: renderiza páginas via pagerender do pdf-parse e extrai texto ────────
+// Usa o pdfjs já embutido no pdf-parse (sem worker separado) + Tesseract.js.
+// Ativado quando o PDF não possui camada de texto (imagem convertida para PDF).
 async function ocrizarPDF(buffer) {
-  const pdfDoc = await pdfjsLib.getDocument({ data: new Uint8Array(buffer) }).promise
+  // pdfjs interno do pdf-parse usa document.createElement('canvas') — não existe em Node.js.
+  // Polyfill mínimo para que o render funcione com node-canvas.
+  const hadDocument = typeof global.document !== 'undefined'
+  if (!hadDocument) {
+    global.document = {
+      createElement: (tag) => tag === 'canvas' ? createCanvas(1, 1) : {},
+    }
+  }
+
   const worker = await Tesseract.createWorker('por+eng', 1, { logger: () => {} })
   let texto = ''
 
   try {
-    for (let i = 1; i <= pdfDoc.numPages; i++) {
-      const page   = await pdfDoc.getPage(i)
-      const vp     = page.getViewport({ scale: 2.0 })
-      const canvas = createCanvas(Math.round(vp.width), Math.round(vp.height))
-      const ctx    = canvas.getContext('2d')
-
-      await page.render({ canvasContext: ctx, viewport: vp }).promise
-
-      const { data: { text } } = await worker.recognize(canvas.toBuffer('image/png'))
-      texto += `\n${text}`
-    }
+    await pdfParse(buffer, {
+      pagerender: async (pageData) => {
+        try {
+          const vp     = pageData.getViewport(2.0)   // API v1.x do pdfjs interno do pdf-parse
+          const canvas = createCanvas(Math.round(vp.width), Math.round(vp.height))
+          await pageData.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise
+          const { data: { text } } = await worker.recognize(canvas.toBuffer('image/png'))
+          texto += `\n${text}`
+        } catch (_) { /* ignora páginas com erro de renderização */ }
+        return ''
+      },
+    })
   } finally {
     await worker.terminate()
+    if (!hadDocument) delete global.document
   }
 
   return texto
