@@ -3,6 +3,10 @@ import XLSX from 'xlsx'
 import JSZip from 'jszip'
 import { createCanvas } from 'canvas'
 import Tesseract from 'tesseract.js'
+import pdfjsLib from 'pdfjs-dist/legacy/build/pdf.js'
+
+// Worker vazio = pdfjs roda no thread principal (modo inline, compatível com serverless)
+pdfjsLib.GlobalWorkerOptions.workerSrc = ''
 
 // ── Layout 5 — ArquivoImportado ───────────────────────────────────────────────
 const XLS_HEADERS = [
@@ -858,9 +862,6 @@ async function gerarSaidaGenerica(text, paginas, nomeArquivo) {
 // ── OCR: renderiza páginas e extrai texto via Tesseract ──────────────────────
 // Usado quando o PDF não possui camada de texto (imagem convertida para PDF).
 async function ocrizarPDF(buffer) {
-  // Importa pdfjs-dist diretamente (já instalado como dep de pdf-parse)
-  const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.js')
-
   const pdfDoc = await pdfjsLib.getDocument({ data: new Uint8Array(buffer) }).promise
   const worker = await Tesseract.createWorker('por+eng', 1, { logger: () => {} })
   let texto = ''
