@@ -728,7 +728,9 @@ export async function runConverter(body) {
     pagerender: async pageData => {
       const content = await pageData.getTextContent()
       const itens = []
+      const textoLinha = []
       for (const it of content.items) {
+        textoLinha.push(it.str)
         if (it.str && it.str.trim()) {
           itens.push({
             str: it.str.trim(),
@@ -738,7 +740,7 @@ export async function runConverter(body) {
         }
       }
       paginas.push(itens)
-      return ''
+      return textoLinha.join('')  // reconstrói text para detectarFormato funcionar
     },
   })
 
