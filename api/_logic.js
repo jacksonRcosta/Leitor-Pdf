@@ -55,7 +55,7 @@ const RE_PEDIDO  = /PEDIDO[:\s]*(\d+)/i
 const RE_COMPRA  = /DATA COMPRA:(\d{2}\/\d{2}\/\d{4})/
 const RE_ENTREGA = /DATA ENTREGA:(\d{2}\/\d{2}\/\d{4})/
 const RE_VENC    = /VENCIMENTOS:(\S+)/
-const RE_ITEM    = /^(\d{6})(.+?)([A-Z]{2}\/\d{4})(\d{10,12})(?:R\$\s*)?([\d.]+,\d{2})(?:R\$\s*)?([\d.]+,\d{2})(?:R\$\s*)?([\d.]+,\d{2})(\d+)(\d{13,14})(?:R\$\s*)?([\d.]+,\d{2})/
+const RE_ITEM    = /^(\d{6})(.+?)([A-Z]{2}\/\d{4})(\d{10,12})([\d.]+,\d{2})([\d.]+,\d{2})([\d.]+,\d{2})(\d+)(\d{13,14})([\d.]+,\d{2})/
 
 function extrairPedidos(texto) {
   const pedidos = []
@@ -87,7 +87,7 @@ function extrairPedidos(texto) {
       if (!atual.data_entrega) { const m = RE_ENTREGA.exec(linha); if (m) atual.data_entrega = m[1] }
       if (!atual.vencimentos)  { const m = RE_VENC.exec(linha);    if (m) atual.vencimentos  = m[1] }
 
-      const mItem = RE_ITEM.exec(linha)
+      const mItem = RE_ITEM.exec(linha.replace(/R\$\s*/g, ''))
       if (mItem) {
         atual.itens.push({
           codproduto:       mItem[1],
