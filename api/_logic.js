@@ -366,6 +366,76 @@ function tentarChaveValor(linhasDados) {
   }
 }
 
+// ── Estratégia baseada em posição X/Y real (melhor resultado para tabelas) ────
+// paginas: array de páginas; cada página é array de {str, x, y}
+function extrairTabelaPorPosicao(paginas) {
+  const todasLinhas = []
+
+  for (const itensBrutos of paginas) {
+    // Deduplicar itens com mesma posição e texto (camadas sobrepostas no PDF)
+    const vistos = new Set()
+    const itens = itensBrutos.filter(it => {
+      const k = `${it.x}|${it.y}|${it.str}`
+      if (vistos.has(k)) return false
+      vistos.add(k)
+      return true
+    })
+
+    // Agrupar em linhas por Y (tolerância 4px)
+    const linhas = []
+    for (const it of itens) {
+      const l = linhas.find(l => Math.abs(l.y - it.y) <= 4)
+      if (l) l.itens.push(it)
+      else linhas.push({ y: it.y, itens: [it] })
+    }
+
+    // De cima para baixo (Y decrescente em coordenadas PDF)
+    linhas.sort((a, b) => b.y - a.y)
+    for (const l of linhas) {
+      l.itens.sort((a, b) => a.x - b.x)
+      todasLinhas.push(l.itens)
+    }
+  }
+
+  if (!todasLinhas.length) return null
+
+  // Clusterizar posições X (tolerância 20px) para detectar colunas
+  const clusters = []
+  for (const x of todasLinhas.flatMap(l => l.map(it => it.x)).sort((a, b) => a - b)) {
+    const c = clusters.find(cl => Math.abs(cl.ref - x) <= 20)
+    if (c) { c.xs.push(x); c.ref = Math.round(c.xs.reduce((s, v) => s + v, 0) / c.xs.length) }
+    else clusters.push({ ref: x, xs: [x] })
+  }
+  clusters.sort((a, b) => a.ref - b.ref)
+  if (clusters.length < 2) return null
+
+  const nCols = clusters.length
+
+  // Construir grade: cada linha → array de nCols células
+  const grade = todasLinhas.map(itensLinha => {
+    const linha = new Array(nCols).fill('')
+    for (const it of itensLinha) {
+      const ci = clusters.findIndex(cl => Math.abs(cl.ref - it.x) <= 20)
+      if (ci >= 0) linha[ci] = linha[ci] ? `${linha[ci]} ${it.str}` : it.str
+    }
+    return linha
+  }).filter(r => r.some(c => c.trim()))
+
+  if (grade.length < 2) return null
+
+  // Detectar cabeçalho na primeira linha não-vazia com texto (não números)
+  let cabecalho, dados
+  if (ehCabecalho(grade[0].filter(Boolean))) {
+    cabecalho = grade[0].map((c, i) => c.trim() || `Coluna ${i + 1}`)
+    dados = grade.slice(1)
+  } else {
+    cabecalho = clusters.map((_, i) => `Coluna ${i + 1}`)
+    dados = grade
+  }
+
+  return { cabecalho, dados }
+}
+
 // ── Orquestrador de detecção ──────────────────────────────────────────────────
 function detectarEstrutura(linhas) {
   const comprMedio = linhas.reduce((s, l) => s + l.length, 0) / (linhas.length || 1)
@@ -419,18 +489,27 @@ ${itensXml}
 }
 
 // ── Saída genérica: qualquer PDF não reconhecido ──────────────────────────────
-// Estratégias em cascata: multi-espaço → posição fixa → chave-valor → coluna única
-// Gera XLS + XML + CSV + ZIP compatíveis com o layout padrão da aplicação.
-async function gerarSaidaGenerica(text, nomeArquivo) {
+// Cascata de estratégias:
+//   1. Posição X/Y real (preserva colunas de tabelas visuais)
+//   2. Multi-espaço | posição fixa | chave-valor | coluna única (fallback texto)
+async function gerarSaidaGenerica(text, paginas, nomeArquivo) {
   const nome  = sanitizarNome(nomeArquivo)
   const cnpj  = extrairPrimeiroCnpj(text)
-  const linhas = filtrarRepetitivas(
-    text.split('\n').map(l => l.trim()).filter(Boolean)
-  )
 
-  if (!linhas.length) throw Object.assign(new Error('Nenhum conteúdo legível encontrado no PDF.'), { status: 422 })
+  const todasLinhasTexto = text.split('\n').map(l => l.trim()).filter(Boolean)
+  const metadados = todasLinhasTexto.slice(0, 3)
 
-  const { metadados, cabecalho, dados } = detectarEstrutura(linhas)
+  // Estratégia 1: extração por posição X/Y (melhor para tabelas)
+  let estrutura = extrairTabelaPorPosicao(paginas)
+
+  // Estratégias 2-5: baseadas em texto puro (fallback)
+  if (!estrutura) {
+    const linhas = filtrarRepetitivas(todasLinhasTexto)
+    if (!linhas.length) throw Object.assign(new Error('Nenhum conteúdo legível encontrado no PDF.'), { status: 422 })
+    estrutura = detectarEstrutura(linhas)
+  }
+
+  const { cabecalho, dados } = estrutura
   const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`
 
   // ── XLS ───────────────────────────────────────────────────────────────────
@@ -503,13 +582,32 @@ export async function runConverter(body) {
   const b64 = body?.pdf
   if (!b64) throw Object.assign(new Error('PDF não fornecido'), { status: 400 })
 
-  const buffer   = Buffer.from(b64, 'base64')
-  const { text } = await pdfParse(buffer)
+  const buffer  = Buffer.from(b64, 'base64')
+  const paginas = []
+
+  const { text } = await pdfParse(buffer, {
+    pagerender: async pageData => {
+      const content = await pageData.getTextContent()
+      const itens = []
+      for (const it of content.items) {
+        if (it.str && it.str.trim()) {
+          itens.push({
+            str: it.str.trim(),
+            x: Math.round(it.transform[4]),
+            y: Math.round(it.transform[5]),
+          })
+        }
+      }
+      paginas.push(itens)
+      return ''
+    },
+  })
+
   const formato  = detectarFormato(text)
   const nome     = sanitizarNome(body.nome)
 
   // Formato não reconhecido → exporta todo o conteúdo como planilha genérica
-  if (formato === 'generico') return gerarSaidaGenerica(text, nome)
+  if (formato === 'generico') return gerarSaidaGenerica(text, paginas, nome)
 
   const pedidos = formato === 'ruptura'
     ? extrairRupturaPrePedido(text)
