@@ -122,7 +122,9 @@ function extrairPedidos(texto) {
 // Named capture groups eliminam qualquer risco de off-by-one no destructuring.
 // Grupos: codloja(6d) filial(2d) razao cnpj(14d) codprod(6d) desc ean(13d)
 //         codvend(6d) vend qtd datarup datault
-const RE_RUPTURA = /^(?<codloja>\d{6}) - (?<filial>\d{2}) \| (?<razao>.+?)(?<cnpj>\d{14})(?<codprod>\d{6}) - (?<desc>.+?)(?<ean>\d{13})(?<codvend>\d{6}) - (?<vend>.+?)(?<qtd>\d+)(?<datarup>\d{2}\/\d{2}\/\d{4})(?<datault>\d{2}\/\d{2}\/\d{4})$/
+// Grupo preco é opcional: PDFs sem coluna "Preço de Venda" não o incluem.
+// Quando presente, aparece colado ao nome do vendedor (ex: "FIGUEIREDOR$ 2,80150").
+const RE_RUPTURA = /^(?<codloja>\d{6}) - (?<filial>\d{2}) \| (?<razao>.+?)(?<cnpj>\d{14})(?<codprod>\d{6}) - (?<desc>.+?)(?<ean>\d{13})(?<codvend>\d{6}) - (?<vend>.+?)(?:R\$\s*(?<preco>[\d.]+,\d{2}))?(?<qtd>\d+)(?<datarup>\d{2}\/\d{2}\/\d{4})(?<datault>\d{2}\/\d{2}\/\d{4})$/
 
 function extrairRupturaPrePedido(texto) {
   const mapa = new Map() // CNPJ → pedido
@@ -131,7 +133,7 @@ function extrairRupturaPrePedido(texto) {
     const m = RE_RUPTURA.exec(linha.trim())
     if (!m) continue
 
-    const { codloja, filial, razao, cnpj, codprod, desc, ean, qtd, datarup } = m.groups
+    const { codloja, filial, razao, cnpj, codprod, desc, ean, preco, qtd, datarup } = m.groups
 
     if (!mapa.has(cnpj)) {
       mapa.set(cnpj, {
@@ -154,7 +156,7 @@ function extrairRupturaPrePedido(texto) {
       emba:             '',
       quantidade:       qtd,
       qtUnit:           '',
-      precoVenda:       '',
+      precoVenda:       normalizarPreco(preco || ''),
       preco_emba:       '',
       preco_emba_st:    '',
       preco_unit:       '',
