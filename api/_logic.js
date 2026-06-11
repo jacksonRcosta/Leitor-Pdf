@@ -32,6 +32,29 @@ const normalizarPreco = v => {
   return s.replace(/\.(?=\d{3}[,])/g, '').replace(',', '.')
 }
 
+// ── Extração de CNPJ do texto ─────────────────────────────────────────────────
+function extrairPrimeiroCnpj(texto) {
+  const m = texto.match(/\b(\d{2}[\.\s]?\d{3}[\.\s]?\d{3}[\/\s]?\d{4}[-\s]?\d{2})\b/)
+  if (!m) return null
+  const n = m[1].replace(/\D/g, '')
+  return n.length === 14 ? { formatado: fmtCNPJ(n), numerico: n } : null
+}
+
+// ── Sanitiza string para tag XML válida ───────────────────────────────────────
+function sanitizarTag(s) {
+  const t = String(s || 'Campo').replace(/[^a-zA-Z0-9_]/g, '_').replace(/^(\d)/, 'C_$1')
+  return t || 'Campo'
+}
+
+// ── Remove linhas repetitivas (cabeçalhos/rodapés de página) ─────────────────
+function filtrarRepetitivas(linhas) {
+  if (linhas.length < 6) return linhas
+  const freq = {}
+  for (const l of linhas) freq[l] = (freq[l] || 0) + 1
+  const limiar = Math.max(2, linhas.length * 0.15)
+  return linhas.filter(l => freq[l] < limiar)
+}
+
 // ── Detecção de formato ───────────────────────────────────────────────────────
 function detectarFormato(text) {
   if (/ruptura\s*[-–]?\s*pr[eé]/i.test(text)) return 'ruptura'
@@ -332,6 +355,17 @@ function tentarPosicaoFixa(linhasDados) {
   return { cabecalho, dados }
 }
 
+// ── Estratégia C: pares chave–valor (ex: "Nome: João", "Data: 01/01/2025") ───
+function tentarChaveValor(linhasDados) {
+  const RE_KV = /^([^:\n]{1,60}):\s*(.+)$/
+  const pares = linhasDados.map(l => RE_KV.exec(l)).filter(Boolean)
+  if (pares.length / linhasDados.length < 0.4) return null
+  return {
+    cabecalho: ['Campo', 'Valor'],
+    dados: pares.map(m => [m[1].trim(), limparCelula(m[2].trim())]),
+  }
+}
+
 // ── Orquestrador de detecção ──────────────────────────────────────────────────
 function detectarEstrutura(linhas) {
   const comprMedio = linhas.reduce((s, l) => s + l.length, 0) / (linhas.length || 1)
@@ -345,7 +379,7 @@ function detectarEstrutura(linhas) {
   const metadados   = linhas.slice(0, Math.max(1, corte))
   const linhasDados = linhas.slice(corte)
 
-  const resultado = tentarMultiEspaco(linhasDados) ?? tentarPosicaoFixa(linhasDados)
+  const resultado = tentarMultiEspaco(linhasDados) ?? tentarPosicaoFixa(linhasDados) ?? tentarChaveValor(linhasDados)
   if (resultado) return { metadados, ...resultado }
 
   // Fallback: coluna única preservando todo o conteúdo
@@ -356,14 +390,43 @@ function detectarEstrutura(linhas) {
   }
 }
 
+// ── XML genérico ──────────────────────────────────────────────────────────────
+function gerarXmlGenerico(metadados, cabecalho, dados, cnpj) {
+  const now      = new Date().toISOString().slice(0, 19)
+  const itensXml = dados.map((linha, i) => {
+    const cols = cabecalho.map((h, ci) =>
+      `      <${sanitizarTag(h)}>${esc(String(linha[ci] ?? ''))}</${sanitizarTag(h)}>`
+    ).join('\n')
+    return `    <Item seq="${i + 1}">\n${cols}\n    </Item>`
+  }).join('\n')
+
+  const cabXml = [
+    cnpj ? `    <CNPJ>${esc(cnpj.formatado)}</CNPJ>` : '',
+    cnpj ? `    <CNPJNumerico>${cnpj.numerico}</CNPJNumerico>` : '',
+    `    <Titulo>${esc(metadados[0] || '')}</Titulo>`,
+    `    <TotalItens>${dados.length}</TotalItens>`,
+  ].filter(Boolean).join('\n')
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<DocumentoExtraido geradoEm="${now}" versao="1.0">
+  <Cabecalho>
+${cabXml}
+  </Cabecalho>
+  <Itens>
+${itensXml}
+  </Itens>
+</DocumentoExtraido>`
+}
+
 // ── Saída genérica: qualquer PDF não reconhecido ──────────────────────────────
-// Estrutura idêntica ao layout de compra/ruptura:
-//   Linha 1 : info do documento  (equivalente à linha de CNPJ)
-//   Linha 2 : cabeçalho das colunas
-//   Linha 3+: dados
+// Estratégias em cascata: multi-espaço → posição fixa → chave-valor → coluna única
+// Gera XLS + XML + CSV + ZIP compatíveis com o layout padrão da aplicação.
 async function gerarSaidaGenerica(text, nomeArquivo) {
-  const nome   = sanitizarNome(nomeArquivo)
-  const linhas = text.split('\n').map(l => l.trim()).filter(Boolean)
+  const nome  = sanitizarNome(nomeArquivo)
+  const cnpj  = extrairPrimeiroCnpj(text)
+  const linhas = filtrarRepetitivas(
+    text.split('\n').map(l => l.trim()).filter(Boolean)
+  )
 
   if (!linhas.length) throw Object.assign(new Error('Nenhum conteúdo legível encontrado no PDF.'), { status: 422 })
 
@@ -371,13 +434,12 @@ async function gerarSaidaGenerica(text, nomeArquivo) {
   const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`
 
   // ── XLS ───────────────────────────────────────────────────────────────────
+  const infoLinha = cnpj
+    ? ['cnpj', cnpj.numerico]
+    : ['documento', metadados.join('  |  ')]
   const wb     = XLSX.utils.book_new()
-  const wsData = [
-    ['documento', metadados.join('  |  ')],   // linha info (como "cnpj" nos pedidos)
-    cabecalho,                                  // cabeçalho das colunas
-    ...dados,                                   // linhas de dados
-  ]
-  const ws = XLSX.utils.aoa_to_sheet(wsData)
+  const wsData = [infoLinha, cabecalho, ...dados]
+  const ws     = XLSX.utils.aoa_to_sheet(wsData)
 
   ws['!cols'] = cabecalho.map((h, ci) => ({
     wch: Math.min(60, Math.max(
@@ -390,6 +452,10 @@ async function gerarSaidaGenerica(text, nomeArquivo) {
   const xlsBuf = XLSX.write(wb, { type: 'buffer', bookType: 'xls' })
   const xlsB64 = Buffer.from(xlsBuf).toString('base64')
 
+  // ── XML ───────────────────────────────────────────────────────────────────
+  const xmlStr  = gerarXmlGenerico(metadados, cabecalho, dados, cnpj)
+  const xmlNome = `${nome}.xml`
+
   // ── CSV ───────────────────────────────────────────────────────────────────
   const csvContent = '﻿' + [
     cabecalho.map(q).join(';'),
@@ -401,24 +467,30 @@ async function gerarSaidaGenerica(text, nomeArquivo) {
   // ── ZIP ───────────────────────────────────────────────────────────────────
   const zip = new JSZip()
   zip.file(`${nome}.xls`, xlsBuf)
+  zip.file(xmlNome, xmlStr)
   zip.file(csvNome, Buffer.from(csvContent, 'utf-8'))
   const zipB64 = await zip.generateAsync({ type: 'base64', compression: 'DEFLATE' })
 
+  const razao  = (metadados[0] || nome).substring(0, 80)
+  const lojaId = cnpj
+    ? cnpj.numerico.slice(-6)
+    : (metadados[1] || metadados[0] || nome).substring(0, 20).trim() || 'GERAL'
+
   return {
     pedidos: [{
-      loja:              (metadados[1] || metadados[0] || nome).substring(0, 20).trim() || 'GERAL',
-      razao_social:      (metadados[0] || nome).substring(0, 80),
+      loja:              lojaId,
+      razao_social:      razao,
       num_pedido:        '',
-      cnpj:              '',
+      cnpj:              cnpj?.formatado || '',
       total_itens:       dados.length,
       data_compra:       '',
       data_entrega:      '',
       xls_nome:          `${nome}.xls`,
       xls_completo_nome: `${nome}.xls`,
-      xml_nome:          '',
+      xml_nome:          xmlNome,
       xls:               xlsB64,
       xls_completo:      xlsB64,
-      xml:               '',
+      xml:               Buffer.from(xmlStr, 'utf-8').toString('base64'),
     }],
     zip:      zipB64,
     csv:      csvB64,
