@@ -14,8 +14,10 @@ const XLS_KEYS = [
   'preco_unit', 'preco_tot', 'preco_tot_ion', 'preco_tot_ion_st',
 ]
 
-// Colunas deixadas em branco na versão XLS padrão (ambos os formatos usam o mesmo layout)
+// Colunas deixadas em branco na versão XLS padrão
 const COLS_VAZIAS_PEDIDO = new Set(['codproduto', 'descricao', 'emba', 'preco_unit', 'preco_tot'])
+// Emitir Pedido de Compra: codproduto, descricao e preco_tot estão disponíveis
+const COLS_VAZIAS_EMITIR = new Set(['emba', 'qtUnit', 'preco_emba', 'preco_emba_st', 'preco_tot_ion', 'preco_tot_ion_st'])
 
 // ── Utilitários ───────────────────────────────────────────────────────────────
 const esc     = s => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
@@ -57,8 +59,9 @@ function filtrarRepetitivas(linhas) {
 
 // ── Detecção de formato ───────────────────────────────────────────────────────
 function detectarFormato(text) {
-  if (/ruptura\s*[-–]?\s*pr[eé]/i.test(text)) return 'ruptura'
-  if (/RAZ[ÃA]O SOCIAL:CNPJ:/i.test(text))    return 'pedido'
+  if (/ruptura\s*[-–]?\s*pr[eé]/i.test(text))         return 'ruptura'
+  if (/RAZ[ÃA]O SOCIAL:CNPJ:/i.test(text))            return 'pedido'
+  if (/emitir\s+pedido\s+de\s+compra/i.test(text))    return 'emitir_pedido'
   return 'generico'
 }
 
@@ -366,6 +369,142 @@ function tentarChaveValor(linhasDados) {
   }
 }
 
+// ── Helper: converte itens brutos de uma página em grade (clusters + linhas) ──
+function paginaParaGrade(itensBrutos) {
+  const vistos = new Set()
+  const itens = itensBrutos.filter(it => {
+    const k = `${it.x}|${it.y}|${it.str}`
+    if (vistos.has(k)) return false
+    vistos.add(k); return true
+  })
+
+  const linhas = []
+  for (const it of itens) {
+    const l = linhas.find(l => Math.abs(l.y - it.y) <= 4)
+    if (l) l.itens.push(it)
+    else linhas.push({ y: it.y, itens: [it] })
+  }
+  linhas.sort((a, b) => b.y - a.y)
+  for (const l of linhas) l.itens.sort((a, b) => a.x - b.x)
+
+  const clusters = []
+  for (const x of itens.map(it => it.x).sort((a, b) => a - b)) {
+    const c = clusters.find(cl => Math.abs(cl.ref - x) <= 20)
+    if (c) { c.xs.push(x); c.ref = Math.round(c.xs.reduce((s, v) => s + v, 0) / c.xs.length) }
+    else clusters.push({ ref: x, xs: [x] })
+  }
+  clusters.sort((a, b) => a.ref - b.ref)
+
+  const nCols = clusters.length
+  const grade = linhas.map(l => {
+    const row = new Array(nCols).fill('')
+    for (const it of l.itens) {
+      const ci = clusters.findIndex(cl => Math.abs(cl.ref - it.x) <= 20)
+      if (ci >= 0) row[ci] = row[ci] ? `${row[ci]} ${it.str}` : it.str
+    }
+    return row
+  }).filter(r => r.some(c => c.trim()))
+
+  return { grade, clusters }
+}
+
+// ── Parser C: Emitir Pedido de Compra ─────────────────────────────────────────
+// Formato "210 - Emitir Pedido de Compra": uma página por pedido.
+// Extrai CNPJ do cabeçalho e apenas as linhas de produto (EAN na 1ª coluna).
+function extrairEmitirPedido(paginas) {
+  const pedidos = []
+
+  for (const itensBrutos of paginas) {
+    const { grade, clusters } = paginaParaGrade(itensBrutos)
+    if (!grade.length) continue
+
+    // Retorna o valor da célula mais próxima do X de referência (dentro de 25px)
+    const getCel = (row, xRef) => {
+      let bestCi = -1, bestDist = Infinity
+      for (let ci = 0; ci < clusters.length; ci++) {
+        const dist = Math.abs(clusters[ci].ref - xRef)
+        if (dist <= 25 && dist < bestDist) { bestCi = ci; bestDist = dist }
+      }
+      return bestCi >= 0 ? row[bestCi].trim() : ''
+    }
+
+    let cnpj_numerico = '', cnpj_formatado = '', num_pedido = '', data_compra = ''
+    const itensPedido = []
+
+    for (const row of grade) {
+      // CNPJ do cliente: célula "CNPJ:" seguida do número
+      for (let i = 0; i < row.length - 1; i++) {
+        if (/^CNPJ:?$/i.test(row[i].trim())) {
+          const n = row[i + 1].replace(/\D/g, '')
+          if (n.length === 14 && !cnpj_numerico) {
+            cnpj_numerico = n
+            cnpj_formatado = fmtCNPJ(n)
+          }
+        }
+      }
+
+      // Número do pedido
+      if (!num_pedido) {
+        for (let i = 0; i < row.length; i++) {
+          const m2 = row[i].match(/N[úu]mero do Pedido[:\s]+(\d+)/i)
+          if (m2) { num_pedido = m2[1]; break }
+          if (/N[úu]mero do Pedido/i.test(row[i])) {
+            const prox = row.slice(i + 1).find(c => c.trim())
+            if (prox) { num_pedido = prox.trim(); break }
+          }
+        }
+      }
+
+      // Data de compra (primeira data no formato dd/mm/aaaa encontrada no cabeçalho)
+      if (!data_compra) {
+        for (const cell of row) {
+          const m = cell.match(/\b(\d{2}\/\d{2}\/\d{4})\b/)
+          if (m) { data_compra = m[1]; break }
+        }
+      }
+
+      // Linha de produto: primeira célula válida é EAN (13-14 dígitos, começa com 7)
+      const primeira = row.find(c => c.trim())
+      if (primeira && /^7\d{12,13}$/.test(primeira.trim())) {
+        itensPedido.push({
+          codembalagem:     getCel(row, 22),
+          codproduto:       getCel(row, 169),
+          descricao:        getCel(row, 210),
+          quantidade:       getCel(row, 429),
+          precoVenda:       normalizarPreco(getCel(row, 483)),
+          preco_tot:        getCel(row, 541),
+          emba:             '',
+          qtUnit:           '',
+          preco_emba:       '',
+          preco_emba_st:    '',
+          preco_unit:       normalizarPreco(getCel(row, 483)),
+          preco_tot_ion:    '',
+          preco_tot_ion_st: '',
+          frete:            '',
+          desconto:         getCel(row, 453),
+        })
+      }
+    }
+
+    if (itensPedido.length > 0) {
+      pedidos.push({
+        razao_social:   '',
+        cnpj_formatado,
+        cnpj_numerico,
+        ie:             '',
+        loja:           num_pedido || cnpj_numerico.slice(-6) || 'GERAL',
+        num_pedido,
+        data_compra,
+        data_entrega:   '',
+        vencimentos:    '',
+        itens:          itensPedido,
+      })
+    }
+  }
+
+  return pedidos
+}
+
 // ── Estratégia baseada em posição X/Y real (melhor resultado para tabelas) ────
 // paginas: array de páginas; cada página é array de {str, x, y}
 function extrairTabelaPorPosicao(paginas) {
@@ -611,11 +750,13 @@ export async function runConverter(body) {
 
   const pedidos = formato === 'ruptura'
     ? extrairRupturaPrePedido(text)
+    : formato === 'emitir_pedido'
+    ? extrairEmitirPedido(paginas)
     : extrairPedidos(text)
 
   if (!pedidos.length) throw Object.assign(new Error('Nenhum pedido encontrado no PDF'), { status: 422 })
 
-  const colsVazias = COLS_VAZIAS_PEDIDO
+  const colsVazias = formato === 'emitir_pedido' ? COLS_VAZIAS_EMITIR : COLS_VAZIAS_PEDIDO
 
   const zip = new JSZip()
   const pedidosComArquivos = pedidos.map(p => {
