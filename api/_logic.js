@@ -2,7 +2,8 @@ import pdfParse from 'pdf-parse'
 import XLSX from 'xlsx'
 import JSZip from 'jszip'
 import { createCanvas } from 'canvas'
-import Tesseract from 'tesseract.js'
+// Tesseract importado de forma lazy — só carrega quando OCR for necessário
+// Evita overhead de WASM em todo request mesmo sem PDFs de imagem
 
 // ── Layout 5 — ArquivoImportado ───────────────────────────────────────────────
 const XLS_HEADERS = [
@@ -859,23 +860,27 @@ async function gerarSaidaGenerica(text, paginas, nomeArquivo) {
 // Usa o pdfjs já embutido no pdf-parse (sem worker separado) + Tesseract.js.
 // Ativado quando o PDF não possui camada de texto (imagem convertida para PDF).
 async function ocrizarPDF(buffer) {
-  // pdfjs interno do pdf-parse usa document.createElement('canvas') — não existe em Node.js.
-  // Polyfill mínimo para que o render funcione com node-canvas.
+  // Import lazy: evita carregar WASM do Tesseract em requests sem OCR
+  const { default: Tesseract } = await import('tesseract.js')
+
+  // Polyfill: pdfjs interno usa document.createElement('canvas') — não existe em Node.js
   const hadDocument = typeof global.document !== 'undefined'
   if (!hadDocument) {
-    global.document = {
-      createElement: (tag) => tag === 'canvas' ? createCanvas(1, 1) : {},
-    }
+    global.document = { createElement: (tag) => tag === 'canvas' ? createCanvas(1, 1) : {} }
   }
 
   const worker = await Tesseract.createWorker('por+eng', 1, { logger: () => {} })
   let texto = ''
+  let paginas = 0
+  const MAX_PAGINAS_OCR = 10  // evita timeout em PDFs muito grandes
 
   try {
     await pdfParse(buffer, {
       pagerender: async (pageData) => {
+        if (paginas >= MAX_PAGINAS_OCR) return ''
+        paginas++
         try {
-          const vp     = pageData.getViewport(2.0)   // API v1.x do pdfjs interno do pdf-parse
+          const vp     = pageData.getViewport(1.5)   // API v1.x do pdfjs interno do pdf-parse
           const canvas = createCanvas(Math.round(vp.width), Math.round(vp.height))
           await pageData.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise
           const { data: { text } } = await worker.recognize(canvas.toBuffer('image/png'))
