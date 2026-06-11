@@ -26,12 +26,15 @@ const fmtCNPJ = c => /^\d{14}$/.test(c)
   ? c.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5')
   : c
 
-// Remove "R$", converte separador de milhar (ponto) e decimal (vírgula → ponto)
-// Exemplos: "R$ 2,00" → "2.00" | "1.234,56" → "1234.56" | "2,00" → "2.00"
+// Remove "R$", converte separador de milhar (ponto) e decimal (vírgula → ponto),
+// trunca para exatamente 2 casas decimais.
+// Exemplos: "R$ 2,00"→"2.00" | "16,990000"→"16.99" | "1.234,56"→"1234.56"
 const normalizarPreco = v => {
   const s = String(v || '').replace(/R\$\s*/gi, '').trim()
   if (!s) return ''
-  return s.replace(/\.(?=\d{3}[,])/g, '').replace(',', '.')
+  const limpo = s.replace(/\.(?=\d{3}[,])/g, '').replace(',', '.')
+  const num = parseFloat(limpo)
+  return isNaN(num) ? limpo : num.toFixed(2)
 }
 
 // ── Extração de CNPJ do texto ─────────────────────────────────────────────────
@@ -62,6 +65,7 @@ function detectarFormato(text) {
   if (/ruptura\s*[-–]?\s*pr[eé]/i.test(text))         return 'ruptura'
   if (/RAZ[ÃA]O SOCIAL:CNPJ:/i.test(text))            return 'pedido'
   if (/emitir\s+pedido\s+de\s+compra/i.test(text))    return 'emitir_pedido'
+  if (/pedidos de compra por periodo/i.test(text))     return 'ciss_pedido'
   return 'generico'
 }
 
@@ -505,6 +509,139 @@ function extrairEmitirPedido(paginas) {
   return pedidos
 }
 
+// ── Parser D: Pedidos de Compra por Período (V. CISS) ────────────────────────
+// Uma página por loja. Usa posições X/Y brutas sem clustering para evitar
+// colisão entre seção de cabeçalho e seção de dados do mesmo PDF.
+function extrairCissPedido(paginas) {
+  const pedidos = []
+
+  for (const itensBrutos of paginas) {
+    const vistos = new Set()
+    const itens = itensBrutos.filter(it => {
+      const k = `${it.x}|${it.y}|${it.str}`
+      if (vistos.has(k)) return false
+      vistos.add(k); return true
+    })
+
+    const linhas = []
+    for (const it of itens) {
+      const l = linhas.find(l => Math.abs(l.y - it.y) <= 4)
+      if (l) l.itens.push(it)
+      else linhas.push({ y: it.y, itens: [it] })
+    }
+    linhas.sort((a, b) => b.y - a.y)
+    for (const l of linhas) l.itens.sort((a, b) => a.x - b.x)
+
+    // Busca o valor mais próximo de xRef na linha (sem clustering global)
+    const getX = (its, xRef, tol = 25) => {
+      let best = null, bestD = Infinity
+      for (const it of its) {
+        const d = Math.abs(it.x - xRef)
+        if (d <= tol && d < bestD) { best = it.str; bestD = d }
+      }
+      return (best || '').trim()
+    }
+
+    // Busca o primeiro valor não-vazio após um item que casa com a regex
+    const aposLabel = (its, re) => {
+      const i = its.findIndex(it => re.test(it.str.trim()))
+      return i >= 0 ? (its.slice(i + 1).find(it => it.str.trim())?.str?.trim() || '') : ''
+    }
+
+    let cnpj_numerico = '', cnpj_formatado = '', num_pedido = ''
+    let data_compra = '', data_entrega = '', razao_social = ''
+    const itensPedido = []
+
+    for (const l of linhas) {
+      const its = l.itens
+
+      // CNPJ
+      if (!cnpj_numerico) {
+        const v = aposLabel(its, /^CNPJ:?$/i)
+        if (v) { const n = v.replace(/\D/g, ''); if (n.length === 14) { cnpj_numerico = n; cnpj_formatado = fmtCNPJ(n) } }
+      }
+
+      // Razão social da loja
+      if (!razao_social) {
+        const v = aposLabel(its, /^Empresa:?$/i)
+        if (v) razao_social = v
+      }
+
+      // Número do pedido (aparece como item separado após o label)
+      if (!num_pedido) {
+        const i = its.findIndex(it => /Pedido No\.?/i.test(it.str))
+        if (i >= 0) {
+          const prox = its.slice(i + 1).find(it => /^\d+$/.test(it.str.trim()))
+          if (prox) num_pedido = prox.str.trim()
+        }
+      }
+
+      // Data de compra (emissão)
+      if (!data_compra) {
+        const v = aposLabel(its, /Emitido em:?$/i)
+        if (v) { const m = v.match(/\d{2}\/\d{2}\/\d{4}/); if (m) data_compra = m[0] }
+        if (!data_compra) {
+          for (const it of its) { const m = it.str.match(/(\d{2}\/\d{2}\/\d{4})/); if (m && !data_compra) data_compra = m[1] }
+        }
+      }
+
+      // Data de entrega
+      if (!data_entrega) {
+        const i = its.findIndex(it => /Dias p\/ Entrega/i.test(it.str))
+        if (i >= 0) {
+          const prox = its.slice(i + 1).find(it => /\d{2}\/\d{2}\/\d{4}/.test(it.str))
+          if (prox) data_entrega = prox.str.match(/(\d{2}\/\d{2}\/\d{4})/)[1]
+        }
+      }
+
+      // Linha de produto: tem pelo menos 2 valores monetários e uma descrição textual
+      const precos = its.filter(it => /^\d{1,3}(?:\.\d{3})*,\d{2}$/.test(it.str) || (/,\d{2}$/.test(it.str) && parseFloat(it.str.replace(',', '.')) > 0))
+      const desc = its.find(it => it.str.length > 8 && /[A-Za-z]/.test(it.str) && !/^[A-Z][a-z]/.test(it.str) && !/Fornecedor|Empresa|Endere|Cidade|Bairro|Frete|Pgto|Repres|Notas|Confira|emitidas/i.test(it.str))
+
+      if (precos.length >= 2 && desc) {
+        const cod1 = getX(its, 20, 15)
+        const cod2 = getX(its, 76, 15)
+        const codproduto = (cod1 + cod2).replace(/\D/g, '').slice(0, 6)
+
+        itensPedido.push({
+          codproduto,
+          codembalagem:     getX(its, 331, 20),
+          descricao:        desc.str.trim(),
+          quantidade:       normalizarPreco(getX(its, 456, 25)),
+          precoVenda:       normalizarPreco(getX(its, 427, 25)),
+          preco_tot:        normalizarPreco(getX(its, 522, 25)),
+          emba:             '',
+          qtUnit:           '',
+          preco_emba:       normalizarPreco(getX(its, 490, 25)),
+          preco_emba_st:    '',
+          preco_unit:       normalizarPreco(getX(its, 427, 25)),
+          preco_tot_ion:    normalizarPreco(getX(its, 705, 25)),
+          preco_tot_ion_st: '',
+          frete:            '',
+          desconto:         '',
+        })
+      }
+    }
+
+    if (itensPedido.length > 0) {
+      pedidos.push({
+        razao_social,
+        cnpj_formatado,
+        cnpj_numerico,
+        ie:           '',
+        loja:         cnpj_numerico.slice(-6) || 'GERAL',
+        num_pedido,
+        data_compra,
+        data_entrega,
+        vencimentos:  '',
+        itens:        itensPedido,
+      })
+    }
+  }
+
+  return pedidos
+}
+
 // ── Estratégia baseada em posição X/Y real (melhor resultado para tabelas) ────
 // paginas: array de páginas; cada página é array de {str, x, y}
 function extrairTabelaPorPosicao(paginas) {
@@ -750,15 +887,18 @@ export async function runConverter(body) {
   // Formato não reconhecido → exporta todo o conteúdo como planilha genérica
   if (formato === 'generico') return gerarSaidaGenerica(text, paginas, nome)
 
-  const pedidos = formato === 'ruptura'
-    ? extrairRupturaPrePedido(text)
-    : formato === 'emitir_pedido'
-    ? extrairEmitirPedido(paginas)
-    : extrairPedidos(text)
+  const pedidos =
+    formato === 'ruptura'       ? extrairRupturaPrePedido(text) :
+    formato === 'emitir_pedido' ? extrairEmitirPedido(paginas)  :
+    formato === 'ciss_pedido'   ? extrairCissPedido(paginas)    :
+                                  extrairPedidos(text)
 
   if (!pedidos.length) throw Object.assign(new Error('Nenhum pedido encontrado no PDF'), { status: 422 })
 
-  const colsVazias = formato === 'emitir_pedido' ? COLS_VAZIAS_EMITIR : COLS_VAZIAS_PEDIDO
+  const colsVazias =
+    formato === 'emitir_pedido' ? COLS_VAZIAS_EMITIR :
+    formato === 'ciss_pedido'   ? COLS_VAZIAS_EMITIR :
+                                  COLS_VAZIAS_PEDIDO
 
   const zip = new JSZip()
   const pedidosComArquivos = pedidos.map(p => {
