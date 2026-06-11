@@ -1,6 +1,8 @@
 import pdfParse from 'pdf-parse'
 import XLSX from 'xlsx'
 import JSZip from 'jszip'
+import { createCanvas } from 'canvas'
+import Tesseract from 'tesseract.js'
 
 // ── Layout 5 — ArquivoImportado ───────────────────────────────────────────────
 const XLS_HEADERS = [
@@ -853,6 +855,35 @@ async function gerarSaidaGenerica(text, paginas, nomeArquivo) {
   }
 }
 
+// ── OCR: renderiza páginas e extrai texto via Tesseract ──────────────────────
+// Usado quando o PDF não possui camada de texto (imagem convertida para PDF).
+async function ocrizarPDF(buffer) {
+  // Importa pdfjs-dist diretamente (já instalado como dep de pdf-parse)
+  const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.js')
+
+  const pdfDoc = await pdfjsLib.getDocument({ data: new Uint8Array(buffer) }).promise
+  const worker = await Tesseract.createWorker('por+eng', 1, { logger: () => {} })
+  let texto = ''
+
+  try {
+    for (let i = 1; i <= pdfDoc.numPages; i++) {
+      const page   = await pdfDoc.getPage(i)
+      const vp     = page.getViewport({ scale: 2.0 })
+      const canvas = createCanvas(Math.round(vp.width), Math.round(vp.height))
+      const ctx    = canvas.getContext('2d')
+
+      await page.render({ canvasContext: ctx, viewport: vp }).promise
+
+      const { data: { text } } = await worker.recognize(canvas.toBuffer('image/png'))
+      texto += `\n${text}`
+    }
+  } finally {
+    await worker.terminate()
+  }
+
+  return texto
+}
+
 // ── Ponto de entrada ──────────────────────────────────────────────────────────
 export async function runConverter(body) {
   const b64 = body?.pdf
@@ -861,7 +892,7 @@ export async function runConverter(body) {
   const buffer  = Buffer.from(b64, 'base64')
   const paginas = []
 
-  const { text } = await pdfParse(buffer, {
+  let { text } = await pdfParse(buffer, {
     pagerender: async pageData => {
       const content = await pageData.getTextContent()
       const itens = []
@@ -877,12 +908,19 @@ export async function runConverter(body) {
         }
       }
       paginas.push(itens)
-      return textoLinha.join('')  // reconstrói text para detectarFormato funcionar
+      return textoLinha.join('')
     },
   })
 
-  const formato  = detectarFormato(text)
-  const nome     = sanitizarNome(body.nome)
+  const nome = sanitizarNome(body.nome)
+
+  // PDF sem camada de texto → OCR via Tesseract (imagem convertida para PDF)
+  const totalItens = paginas.reduce((s, p) => s + p.length, 0)
+  if (totalItens === 0 || text.trim().length < 20) {
+    text = await ocrizarPDF(buffer)
+  }
+
+  const formato = detectarFormato(text)
 
   // Formato não reconhecido → exporta todo o conteúdo como planilha genérica
   if (formato === 'generico') return gerarSaidaGenerica(text, paginas, nome)

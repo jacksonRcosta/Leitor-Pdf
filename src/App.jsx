@@ -34,7 +34,7 @@ export default function App() {
     setLoadingMsg('Lendo PDF…')
 
     const controller = new AbortController()
-    const timeout    = setTimeout(() => controller.abort(), 55000)
+    const timeout    = setTimeout(() => controller.abort(), 280000)
 
     try {
       const b64 = await fileToBase64(file)
