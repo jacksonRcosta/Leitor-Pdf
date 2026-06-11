@@ -34,56 +34,78 @@ export default function ResultTable({ data, fileName, onReset }) {
         </div>
       </div>
 
+      {/* Estado vazio */}
+      {pedidos.length === 0 && (
+        <div className="flex flex-col items-center justify-center py-16 text-center">
+          <p className="text-sm text-text-muted mb-4">Nenhum pedido encontrado no documento.</p>
+          <Button onClick={onReset}>Nova conversão</Button>
+        </div>
+      )}
+
       {/* Tabela */}
-      <div className="rounded-lg border border-border bg-surface shadow-sm">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Loja</TableHead>
-              <TableHead>Razão Social</TableHead>
-              <TableHead className="font-mono">Nº Pedido</TableHead>
-              <TableHead>Data Compra</TableHead>
-              <TableHead>Data Entrega</TableHead>
-              <TableHead className="text-right">Itens</TableHead>
-              <TableHead>Downloads</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {pedidos.map(p => (
-              <TableRow key={p.loja}>
-                <TableCell>
-                  <Badge>{p.loja}</Badge>
-                </TableCell>
-                <TableCell className="max-w-[200px] truncate text-sm">{p.razao_social}</TableCell>
-                <TableCell className="font-mono text-xs">{p.num_pedido || '—'}</TableCell>
-                <TableCell className="text-sm">{p.data_compra || '—'}</TableCell>
-                <TableCell className="text-sm">{p.data_entrega || '—'}</TableCell>
-                <TableCell className="text-right font-mono text-sm">{p.total_itens}</TableCell>
-                <TableCell>
-                  <div className="flex items-center gap-1.5">
-                    <Button
-                      variant="outline" size="sm"
-                      className="h-7 px-2 text-xs border-success/40 text-success hover:bg-success/5"
-                      onClick={() => downloadBase64(p.xls, 'application/vnd.ms-excel', p.xls_nome)}
-                      title="XLS padrão (campos selecionados vazios)"
-                    >
-                      XLS
-                    </Button>
-                    <Button
-                      variant="outline" size="sm"
-                      className="h-7 px-2 text-xs border-primary/40 text-primary hover:bg-primary/5"
-                      onClick={() => downloadBase64(p.xls_completo, 'application/vnd.ms-excel', p.xls_completo_nome)}
-                      title="XLS com todos os campos preenchidos"
-                    >
-                      XLS+
-                    </Button>
-                  </div>
-                </TableCell>
+      {pedidos.length > 0 && (
+        <div className="rounded-lg border border-border bg-surface shadow-sm">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Loja</TableHead>
+                <TableHead>Razão Social</TableHead>
+                <TableHead className="font-mono">CNPJ</TableHead>
+                <TableHead className="font-mono">Nº Pedido</TableHead>
+                <TableHead>Data Compra</TableHead>
+                <TableHead>Data Entrega</TableHead>
+                <TableHead className="text-right">Itens</TableHead>
+                <TableHead>Downloads</TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
+            </TableHeader>
+            <TableBody>
+              {pedidos.map(p => (
+                <TableRow key={p.loja}>
+                  <TableCell>
+                    <Badge>{p.loja}</Badge>
+                  </TableCell>
+                  <TableCell className="max-w-[200px] truncate text-sm">{p.razao_social}</TableCell>
+                  <TableCell className="font-mono text-xs">{p.cnpj || '—'}</TableCell>
+                  <TableCell className="font-mono text-xs">{p.num_pedido || '—'}</TableCell>
+                  <TableCell className="text-sm">{p.data_compra || '—'}</TableCell>
+                  <TableCell className="text-sm">{p.data_entrega || '—'}</TableCell>
+                  <TableCell className="text-right font-mono text-sm">{p.total_itens}</TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-1.5">
+                      <Button
+                        variant="outline" size="sm"
+                        className="h-7 px-2 text-xs border-success/40 text-success hover:bg-success/5"
+                        onClick={() => downloadBase64(p.xls, 'application/vnd.ms-excel', p.xls_nome)}
+                        title="XLS padrão (campos selecionados vazios)"
+                      >
+                        XLS
+                      </Button>
+                      <Button
+                        variant="outline" size="sm"
+                        className="h-7 px-2 text-xs border-primary/40 text-primary hover:bg-primary/5"
+                        onClick={() => downloadBase64(p.xls_completo, 'application/vnd.ms-excel', p.xls_completo_nome)}
+                        title="XLS com todos os campos preenchidos"
+                      >
+                        XLS+
+                      </Button>
+                      {p.xml && (
+                        <Button
+                          variant="outline" size="sm"
+                          className="h-7 px-2 text-xs border-warning/40 text-warning hover:bg-warning/5"
+                          onClick={() => downloadBase64(p.xml, 'application/xml', p.xml_nome)}
+                          title="XML de importação"
+                        >
+                          XML
+                        </Button>
+                      )}
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
 
       <Button variant="outline" onClick={onReset}>Nova conversão</Button>
     </div>

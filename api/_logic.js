@@ -24,6 +24,14 @@ const fmtCNPJ = c => /^\d{14}$/.test(c)
   ? c.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5')
   : c
 
+// Remove "R$", converte separador de milhar (ponto) e decimal (vírgula → ponto)
+// Exemplos: "R$ 2,00" → "2.00" | "1.234,56" → "1234.56" | "2,00" → "2.00"
+const normalizarPreco = v => {
+  const s = String(v || '').replace(/R\$\s*/gi, '').trim()
+  if (!s) return ''
+  return s.replace(/\.(?=\d{3}[,])/g, '').replace(',', '.')
+}
+
 // ── Detecção de formato ───────────────────────────────────────────────────────
 function detectarFormato(text) {
   if (/ruptura\s*[-–]?\s*pr[eé]/i.test(text)) return 'ruptura'
@@ -47,7 +55,7 @@ const RE_PEDIDO  = /PEDIDO[:\s]*(\d+)/i
 const RE_COMPRA  = /DATA COMPRA:(\d{2}\/\d{2}\/\d{4})/
 const RE_ENTREGA = /DATA ENTREGA:(\d{2}\/\d{2}\/\d{4})/
 const RE_VENC    = /VENCIMENTOS:(\S+)/
-const RE_ITEM    = /^(\d{6})(.+?)([A-Z]{2}\/\d{4})(\d{10,12})([\d.]+,\d{2})([\d.]+,\d{2})([\d.]+,\d{2})(\d+)(\d{13,14})([\d.]+,\d{2})/
+const RE_ITEM    = /^(\d{6})(.+?)([A-Z]{2}\/\d{4})(\d{10,12})(?:R\$\s*)?([\d.]+,\d{2})(?:R\$\s*)?([\d.]+,\d{2})(?:R\$\s*)?([\d.]+,\d{2})(\d+)(\d{13,14})(?:R\$\s*)?([\d.]+,\d{2})/
 
 function extrairPedidos(texto) {
   const pedidos = []
@@ -86,16 +94,16 @@ function extrairPedidos(texto) {
           descricao:        mItem[2].trim(),
           emba:             mItem[3],
           externo:          mItem[4],
-          precoVenda:       mItem[5],
-          frete:            mItem[6],
-          preco_tot:        mItem[7],
+          precoVenda:       normalizarPreco(mItem[5]),
+          frete:            normalizarPreco(mItem[6]),
+          preco_tot:        normalizarPreco(mItem[7]),
           quantidade:       mItem[8],
           codembalagem:     mItem[9],
-          desconto:         mItem[10],
+          desconto:         normalizarPreco(mItem[10]),
           qtUnit:           '',
           preco_emba:       '',
           preco_emba_st:    '',
-          preco_unit:       mItem[5],
+          preco_unit:       normalizarPreco(mItem[5]),
           preco_tot_ion:    '',
           preco_tot_ion_st: '',
         })

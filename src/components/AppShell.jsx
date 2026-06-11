@@ -66,7 +66,7 @@ export default function AppShell({ appName = 'App', nav = [], topbarActions = nu
         <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-border bg-surface/80 px-4 backdrop-blur md:px-8">
           <button
             onClick={() => setMobileOpen(true)}
-            className="rounded-md p-1 text-text-muted hover:bg-border/50 hover:text-text md:hidden"
+            className="rounded-md p-1 text-text-muted hover:bg-border/50 hover:text-text focus:outline-none focus-visible:ring-2 focus-visible:ring-primary md:hidden"
             aria-label="Abrir menu"
           >
             <Menu className="h-5 w-5" />
