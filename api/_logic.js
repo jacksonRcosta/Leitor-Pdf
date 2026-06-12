@@ -202,15 +202,32 @@ function extrairRupturaPrePedido(texto) {
   return [...mapa.values()].filter(p => p.itens.length > 0)
 }
 
+// Campos que o ION importa como número (t="n"). Células vazias devem ser null
+// para que o XLSX não escreva nenhuma célula (ausente ≠ string vazia).
+const XLS_CAMPOS_NUMERICOS = new Set([
+  'codproduto', 'quantidade', 'qtUnit',
+  'precoVenda', 'preco_emba', 'preco_emba_st',
+  'preco_unit', 'preco_tot', 'preco_tot_ion', 'preco_tot_ion_st',
+])
+
 // ── Geradores (compartilhados) ────────────────────────────────────────────────
 function _montarXls(pedido, completo, colsVazias) {
   const wb = XLSX.utils.book_new()
+
+  const toValor = (k, v) => {
+    if (!completo && colsVazias.has(k)) return null   // coluna omitida → sem célula
+    if (v === '' || v == null) return null             // vazio → sem célula
+    if (XLS_CAMPOS_NUMERICOS.has(k)) {
+      const n = parseFloat(String(v).replace(',', '.'))
+      return isNaN(n) ? null : n                       // número real (t="n")
+    }
+    return v                                           // string (t="s")
+  }
+
   const wsData = [
     ['cnpj', pedido.cnpj_numerico],
     XLS_HEADERS,
-    ...pedido.itens.map(item =>
-      XLS_KEYS.map(k => (!completo && colsVazias.has(k)) ? '' : (item[k] || ''))
-    ),
+    ...pedido.itens.map(item => XLS_KEYS.map(k => toValor(k, item[k]))),
   ]
   const ws = XLSX.utils.aoa_to_sheet(wsData)
   XLSX.utils.book_append_sheet(wb, ws, 'Planilha1')
