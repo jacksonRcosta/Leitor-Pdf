@@ -74,7 +74,7 @@ export default function App() {
     } catch (err) {
       setErrorMsg(
         err.name === 'AbortError'
-          ? 'Tempo limite atingido (55s). Tente com um PDF menor.'
+          ? 'Tempo limite atingido (4 min 40 s). Tente com um PDF menor.'
           : err.message || 'Erro inesperado. Tente novamente.'
       )
       setState('error')
