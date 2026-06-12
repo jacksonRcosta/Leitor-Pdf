@@ -924,10 +924,12 @@ export async function runConverter(body) {
       }
       paginas.push(itens)
 
-      // Reconstrói texto preservando quebras de linha (Y↓ = topo→base, X→ = esq→dir)
+      // Reconstrói linhas por Y (Y↓ = topo→base); itens dentro da linha preservam
+      // a ordem do stream do PDF — reordenar por X quebra parsers que dependem
+      // da sequência original (ex: RE_RAZAO espera "razão RAZÃO SOCIAL:CNPJ:...")
       return [...linhasPorY.entries()]
         .sort((a, b) => b[0] - a[0])
-        .map(([, cols]) => cols.sort((a, b) => a.x - b.x).map(c => c.str).join(''))
+        .map(([, cols]) => cols.map(c => c.str).join(''))
         .join('\n')
     },
   })
