@@ -856,65 +856,42 @@ async function gerarSaidaGenerica(text, paginas, nomeArquivo) {
   }
 }
 
-// ── OCR: renderiza páginas via pdf-parse e extrai texto com Tesseract ───────
-// Fluxo em 2 fases para evitar deadlock no Lambda:
-//   Fase 1 — renderização via pdfjs (pdf-parse interno) → buffers PNG
-//   Fase 2 — reconhecimento Tesseract nos buffers capturados
-// Separar as fases garante que o pdfParse não trave esperando o Tesseract.
+// ── OCR: renderiza páginas via pagerender do pdf-parse e extrai texto ────────
+// Usa o pdfjs já embutido no pdf-parse (sem worker separado) + Tesseract.js.
+// Ativado quando o PDF não possui camada de texto (imagem convertida para PDF).
 async function ocrizarPDF(buffer) {
+  // Import lazy: evita carregar WASM do Tesseract em requests sem OCR
   const { default: Tesseract } = await import('tesseract.js')
 
-  // Polyfill: pdfjs interno usa document.createElement('canvas') em Node.js
+  // Polyfill: pdfjs interno usa document.createElement('canvas') — não existe em Node.js
   const hadDocument = typeof global.document !== 'undefined'
   if (!hadDocument) {
     global.document = { createElement: (tag) => tag === 'canvas' ? createCanvas(1, 1) : {} }
   }
 
-  // ── Fase 1: renderizar cada página para PNG ──────────────────────────────
-  const imagens = []
-  const MAX_PAGINAS_OCR = 10
+  const worker = await Tesseract.createWorker('por+eng', 1, { logger: () => {} })
+  let texto = ''
+  let paginas = 0
+  const MAX_PAGINAS_OCR = 10  // evita timeout em PDFs muito grandes
 
   try {
     await pdfParse(buffer, {
       pagerender: async (pageData) => {
-        if (imagens.length >= MAX_PAGINAS_OCR) return ''
+        if (paginas >= MAX_PAGINAS_OCR) return ''
+        paginas++
         try {
-          // getViewport aceita escalar (API v1.x) ou objeto (API v2.x); tenta ambos
-          let vp = pageData.getViewport(1.5)
-          if (!vp || !vp.width) vp = pageData.getViewport({ scale: 1.5 })
-          const w = Math.round(vp?.width)  || 595
-          const h = Math.round(vp?.height) || 842
-          const canvas = createCanvas(w, h)
+          const vp     = pageData.getViewport(1.5)   // API v1.x do pdfjs interno do pdf-parse
+          const canvas = createCanvas(Math.round(vp.width), Math.round(vp.height))
           await pageData.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise
-          imagens.push(canvas.toBuffer('image/png'))
-        } catch (_) { /* página não renderizável — ignorada */ }
+          const { data: { text } } = await worker.recognize(canvas.toBuffer('image/png'))
+          texto += `\n${text}`
+        } catch (_) { /* ignora páginas com erro de renderização */ }
         return ''
       },
     })
   } finally {
-    if (!hadDocument) delete global.document
-  }
-
-  if (!imagens.length) return ''
-
-  // ── Fase 2: OCR nos PNGs capturados ─────────────────────────────────────
-  // cachePath '/tmp' evita re-download do traineddata em invocações quentes.
-  // Apenas 'por' (PT-BR) — reduz download de ~35 MB para ~22 MB vs 'por+eng'.
-  const worker = await Tesseract.createWorker('por', 1, {
-    logger: () => {},
-    cachePath: '/tmp',
-  })
-
-  let texto = ''
-  try {
-    for (const img of imagens) {
-      try {
-        const { data: { text } } = await worker.recognize(img)
-        texto += `\n${text}`
-      } catch (_) { /* ignora página com falha no OCR */ }
-    }
-  } finally {
     await worker.terminate()
+    if (!hadDocument) delete global.document
   }
 
   return texto
@@ -953,14 +930,7 @@ export async function runConverter(body) {
   // PDF sem camada de texto → OCR via Tesseract (imagem convertida para PDF)
   const totalItens = paginas.reduce((s, p) => s + p.length, 0)
   if (totalItens === 0 || text.trim().length < 20) {
-    const OCR_TIMEOUT_MS = 180_000
-    text = await Promise.race([
-      ocrizarPDF(buffer),
-      new Promise((_, rej) => setTimeout(() =>
-        rej(Object.assign(new Error('Tempo limite de OCR atingido (3 min). Tente um PDF com menos páginas ou com camada de texto.'), { status: 422 })),
-        OCR_TIMEOUT_MS
-      )),
-    ])
+    text = await ocrizarPDF(buffer)
   }
 
   const formato = detectarFormato(text)
