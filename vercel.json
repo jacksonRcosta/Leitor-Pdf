@@ -4,7 +4,7 @@
   "functions": {
     "api/converter.js": {
       "maxDuration": 300,
-      "includeFiles": "node_modules/tesseract.js-core/**"
+      "includeFiles": "{node_modules/tesseract.js-core/**,api/template.xls}"
     }
   },
   "rewrites": [

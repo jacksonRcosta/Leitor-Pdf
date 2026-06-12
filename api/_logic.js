@@ -2,6 +2,13 @@ import pdfParse from 'pdf-parse'
 import XLSX from 'xlsx'
 import JSZip from 'jszip'
 import { createCanvas } from 'canvas'
+import { readFileSync } from 'fs'
+import { fileURLToPath } from 'url'
+import { dirname, join } from 'path'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
+// Template com metadados OLE2 completos (AppVersion, CodePage) aceito pelo ION
+const XLS_TEMPLATE = readFileSync(join(__dirname, 'template.xls'))
 // Tesseract importado de forma lazy — só carrega quando OCR for necessário
 // Evita overhead de WASM em todo request mesmo sem PDFs de imagem
 
@@ -212,25 +219,53 @@ const XLS_CAMPOS_NUMERICOS = new Set([
 
 // ── Geradores (compartilhados) ────────────────────────────────────────────────
 function _montarXls(pedido, completo, colsVazias) {
-  const wb = XLSX.utils.book_new()
-
   const toValor = (k, v) => {
-    if (!completo && colsVazias.has(k)) return null   // coluna omitida → sem célula
-    if (v === '' || v == null) return null             // vazio → sem célula
+    if (!completo && colsVazias.has(k)) return null
+    if (v === '' || v == null) return null
     if (XLS_CAMPOS_NUMERICOS.has(k)) {
       const n = parseFloat(String(v).replace(',', '.'))
-      return isNaN(n) ? null : n                       // número real (t="n")
+      return isNaN(n) ? null : n
     }
-    return v                                           // string (t="s")
+    return v
   }
 
-  const wsData = [
-    ['cnpj', pedido.cnpj_numerico],
-    XLS_HEADERS,
-    ...pedido.itens.map(item => XLS_KEYS.map(k => toValor(k, item[k]))),
-  ]
-  const ws = XLSX.utils.aoa_to_sheet(wsData)
-  XLSX.utils.book_append_sheet(wb, ws, 'Planilha1')
+  // Parte do template aceito pelo ION para preservar metadados OLE2
+  // (AppVersion 16.0000, CodePage, etc.) que o validador do ION exige
+  const wb = XLSX.read(XLS_TEMPLATE, { type: 'buffer' })
+  const ws = wb.Sheets['Planilha1']
+
+  // Limpar todas as linhas de dados do template (manter estrutura)
+  const rng = XLSX.utils.decode_range(ws['!ref'] || 'A1')
+  for (let r = 0; r <= rng.e.r; r++) {
+    for (let c = 0; c <= 12; c++) {
+      delete ws[XLSX.utils.encode_cell({ r, c })]
+    }
+  }
+
+  // Linha 1: CNPJ
+  ws['A1'] = { t: 's', v: 'cnpj' }
+  ws['B1'] = { t: 's', v: pedido.cnpj_numerico }
+
+  // Linha 2: cabeçalhos
+  XLS_HEADERS.forEach((h, ci) => {
+    ws[XLSX.utils.encode_cell({ r: 1, c: ci })] = { t: 's', v: h }
+  })
+
+  // Linhas de dados
+  let maxRow = 1
+  pedido.itens.forEach((item, ri) => {
+    const r = 2 + ri
+    maxRow = r
+    XLS_KEYS.forEach((k, ci) => {
+      const val = toValor(k, item[k])
+      if (val == null) return
+      ws[XLSX.utils.encode_cell({ r, c: ci })] = typeof val === 'number'
+        ? { t: 'n', v: val }
+        : { t: 's', v: String(val) }
+    })
+  })
+
+  ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: maxRow, c: 12 } })
   return XLSX.write(wb, { type: 'buffer', bookType: 'xls' })
 }
 
