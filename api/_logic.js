@@ -869,7 +869,7 @@ async function ocrizarPDF(buffer) {
     global.document = { createElement: (tag) => tag === 'canvas' ? createCanvas(1, 1) : {} }
   }
 
-  const worker = await Tesseract.createWorker('por+eng', 1, { logger: () => {} })
+  const worker = await Tesseract.createWorker('por', 1, { logger: () => {}, cachePath: '/tmp' })
   let texto = ''
   let paginas = 0
   const MAX_PAGINAS_OCR = 10  // evita timeout em PDFs muito grandes
@@ -930,7 +930,13 @@ export async function runConverter(body) {
   // PDF sem camada de texto → OCR via Tesseract (imagem convertida para PDF)
   const totalItens = paginas.reduce((s, p) => s + p.length, 0)
   if (totalItens === 0 || text.trim().length < 20) {
-    text = await ocrizarPDF(buffer)
+    text = await Promise.race([
+      ocrizarPDF(buffer),
+      new Promise((_, rej) => setTimeout(() =>
+        rej(Object.assign(new Error('Tempo limite de OCR atingido (4 min). Tente um PDF com menos páginas ou com camada de texto.'), { status: 422 })),
+        240_000
+      )),
+    ])
   }
 
   const formato = detectarFormato(text)
