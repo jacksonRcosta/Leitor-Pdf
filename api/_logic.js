@@ -866,7 +866,8 @@ async function ocrizarPDF(buffer) {
   // Polyfill: pdfjs interno usa document.createElement('canvas') — não existe em Node.js
   const hadDocument = typeof global.document !== 'undefined'
   if (!hadDocument) {
-    global.document = { createElement: (tag) => tag === 'canvas' ? createCanvas(1, 1) : {} }
+    global.document    = { createElement: (tag) => tag === 'canvas' ? createCanvas(1, 1) : {} }
+    global.HTMLElement = class HTMLElement {}  // pdfjs v2 verifica instanceof HTMLElement ao renderizar imagens inline
   }
 
   const worker = await Tesseract.createWorker('por', 1, { logger: () => {}, cachePath: '/tmp' })
@@ -891,7 +892,10 @@ async function ocrizarPDF(buffer) {
     })
   } finally {
     await worker.terminate()
-    if (!hadDocument) delete global.document
+    if (!hadDocument) {
+      delete global.document
+      delete global.HTMLElement
+    }
   }
 
   return texto
@@ -909,19 +913,22 @@ export async function runConverter(body) {
     pagerender: async pageData => {
       const content = await pageData.getTextContent()
       const itens = []
-      const textoLinha = []
+      const linhasPorY = new Map()
+
       for (const it of content.items) {
-        textoLinha.push(it.str)
-        if (it.str && it.str.trim()) {
-          itens.push({
-            str: it.str.trim(),
-            x: Math.round(it.transform[4]),
-            y: Math.round(it.transform[5]),
-          })
-        }
+        const x = Math.round(it.transform[4])
+        const y = Math.round(it.transform[5])
+        if (!linhasPorY.has(y)) linhasPorY.set(y, [])
+        linhasPorY.get(y).push({ str: it.str, x })
+        if (it.str && it.str.trim()) itens.push({ str: it.str.trim(), x, y })
       }
       paginas.push(itens)
-      return textoLinha.join('')
+
+      // Reconstrói texto preservando quebras de linha (Y↓ = topo→base, X→ = esq→dir)
+      return [...linhasPorY.entries()]
+        .sort((a, b) => b[0] - a[0])
+        .map(([, cols]) => cols.sort((a, b) => a.x - b.x).map(c => c.str).join(''))
+        .join('\n')
     },
   })
 
