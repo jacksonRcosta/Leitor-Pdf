@@ -95,11 +95,11 @@ function sanitizarNome(nome) {
 //   seq<64 | cod 64–103 | desc 104–484 | emba 485–536 | ean 537–639 | qtd 640–699 | preco_un 700–769 | preco_tot ≥770
 function extrairPedidoVendaIon(text, paginas) {
   const mRazao  = text.match(/^([\d]+ - .+)$/m)
-  const mCnpj   = text.match(/CNPJ:\s*(\d{14})/)
+  const mCnpj   = text.match(/CNPJ:\s*(\d{2}[.\s]?\d{3}[.\s]?\d{3}[\/\s]?\d{4}[-\s]?\d{2})/)
   const mPedido = text.match(/Número do Pedido:\s*(\d+)/)
   const mData   = text.match(/Pedido feito em:\s*(\d{2}\/\d{2}\/\d{4})/)
 
-  const cnpjRaw = mCnpj?.[1] || ''
+  const cnpjRaw = (mCnpj?.[1] || '').replace(/\D/g, '')
   const pedido = {
     razao_social:   mRazao?.[1]?.trim() || '',
     cnpj_formatado: fmtCNPJ(cnpjRaw),
