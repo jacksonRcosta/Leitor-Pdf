@@ -28,6 +28,8 @@ const XLS_KEYS = [
 const COLS_VAZIAS_PEDIDO = new Set(['codproduto', 'descricao', 'emba', 'preco_unit', 'preco_tot'])
 // Emitir Pedido de Compra: codproduto, descricao e preco_tot estão disponíveis
 const COLS_VAZIAS_EMITIR = new Set(['emba', 'qtUnit', 'preco_emba', 'preco_emba_st', 'preco_tot_ion', 'preco_tot_ion_st'])
+// Pedido de Venda ION: codproduto, codembalagem, quantidade, descricao, emba, preco_unit, preco_tot disponíveis
+const COLS_VAZIAS_ION_VENDA = new Set(['qtUnit', 'precoVenda', 'preco_emba', 'preco_emba_st', 'preco_tot_ion', 'preco_tot_ion_st'])
 
 // ── Utilitários ───────────────────────────────────────────────────────────────
 const esc     = s => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
@@ -76,6 +78,7 @@ function detectarFormato(text) {
   if (/RAZ[ÃA]O SOCIAL:CNPJ:/i.test(text))            return 'pedido'
   if (/emitir\s+pedido\s+de\s+compra/i.test(text))    return 'emitir_pedido'
   if (/pedidos de compra por periodo/i.test(text))     return 'ciss_pedido'
+  if (/PEDIDO DE VENDA/i.test(text) && /ION Sistemas/i.test(text)) return 'pedido_venda_ion'
   return 'generico'
 }
 
@@ -85,6 +88,64 @@ function sanitizarNome(nome) {
     .replace(/\.pdf$/i, '')
     .replace(/[\\/:*?"<>|]/g, '_')
     .trim() || 'documento'
+}
+
+// ── Parser F: Pedido de Venda ION ─────────────────────────────────────────────
+// Layout de colunas por coordenada X (pagerender):
+//   seq<64 | cod 64–103 | desc 104–484 | emba 485–536 | ean 537–639 | qtd 640–699 | preco_un 700–769 | preco_tot ≥770
+function extrairPedidoVendaIon(text, paginas) {
+  const mRazao  = text.match(/^([\d]+ - .+)$/m)
+  const mCnpj   = text.match(/CNPJ:\s*(\d{14})/)
+  const mPedido = text.match(/Número do Pedido:\s*(\d+)/)
+  const mData   = text.match(/Pedido feito em:\s*(\d{2}\/\d{2}\/\d{4})/)
+
+  const cnpjRaw = mCnpj?.[1] || ''
+  const pedido = {
+    razao_social:   mRazao?.[1]?.trim() || '',
+    cnpj_formatado: fmtCNPJ(cnpjRaw),
+    cnpj_numerico:  cnpjRaw,
+    loja:           cnpjRaw.slice(-6),
+    num_pedido:     mPedido?.[1] || '',
+    data_compra:    mData?.[1] || '',
+    data_entrega:   '',
+    vencimentos:    '',
+    itens:          [],
+  }
+
+  const todosItens = paginas.flat()
+  const ys = [...new Set(todosItens.map(i => i.y))].sort((a, b) => b - a)
+
+  for (const y of ys) {
+    const linha = todosItens.filter(i => i.y === y)
+    const seq = linha.filter(i => i.x < 64).map(i => i.str).join('').trim()
+    const cod = linha.filter(i => i.x >= 64 && i.x < 104).map(i => i.str).join('').trim()
+    if (!/^\d+$/.test(seq) || !/^\d{6,7}$/.test(cod)) continue
+
+    const desc     = linha.filter(i => i.x >= 104 && i.x < 485).map(i => i.str).join('').trim()
+    const emba     = linha.filter(i => i.x >= 485 && i.x < 537).map(i => i.str).join('').trim()
+    const ean      = linha.filter(i => i.x >= 537 && i.x < 640).map(i => i.str).join('').trim()
+    const qtd      = linha.filter(i => i.x >= 640 && i.x < 700).map(i => i.str).join('').trim()
+    const precoUn  = linha.filter(i => i.x >= 700 && i.x < 770).map(i => i.str).join('').replace(/\$/g, '').trim()
+    const precoTot = linha.filter(i => i.x >= 770).map(i => i.str).join('').replace(/\$/g, '').trim()
+
+    pedido.itens.push({
+      codproduto:       cod,
+      codembalagem:     ean,
+      quantidade:       qtd,
+      descricao:        desc,
+      emba:             emba || 'UN',
+      qtUnit:           '',
+      precoVenda:       '',
+      preco_emba:       '',
+      preco_emba_st:    '',
+      preco_unit:       normalizarPreco(precoUn),
+      preco_tot:        normalizarPreco(precoTot),
+      preco_tot_ion:    '',
+      preco_tot_ion_st: '',
+    })
+  }
+
+  return pedido.itens.length ? [pedido] : []
 }
 
 // ── Parser A: Pedido de Compra ─────────────────────────────────────────────────
@@ -1006,17 +1067,19 @@ export async function runConverter(body) {
   if (formato === 'generico') return gerarSaidaGenerica(text, paginas, nome)
 
   const pedidos =
-    formato === 'ruptura'       ? extrairRupturaPrePedido(text) :
-    formato === 'emitir_pedido' ? extrairEmitirPedido(paginas)  :
-    formato === 'ciss_pedido'   ? extrairCissPedido(paginas)    :
-                                  extrairPedidos(text)
+    formato === 'ruptura'          ? extrairRupturaPrePedido(text)        :
+    formato === 'emitir_pedido'    ? extrairEmitirPedido(paginas)         :
+    formato === 'ciss_pedido'      ? extrairCissPedido(paginas)           :
+    formato === 'pedido_venda_ion' ? extrairPedidoVendaIon(text, paginas) :
+                                     extrairPedidos(text)
 
   if (!pedidos.length) throw Object.assign(new Error('Nenhum pedido encontrado no PDF'), { status: 422 })
 
   const colsVazias =
-    formato === 'emitir_pedido' ? COLS_VAZIAS_EMITIR :
-    formato === 'ciss_pedido'   ? COLS_VAZIAS_EMITIR :
-                                  COLS_VAZIAS_PEDIDO
+    formato === 'emitir_pedido'    ? COLS_VAZIAS_EMITIR    :
+    formato === 'ciss_pedido'      ? COLS_VAZIAS_EMITIR    :
+    formato === 'pedido_venda_ion' ? COLS_VAZIAS_ION_VENDA :
+                                     COLS_VAZIAS_PEDIDO
 
   const zip = new JSZip()
   const pedidosComArquivos = pedidos.map(p => {
