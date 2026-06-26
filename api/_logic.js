@@ -27,7 +27,9 @@ const XLS_KEYS = [
 // Colunas deixadas em branco na versão XLS padrão
 const COLS_VAZIAS_PEDIDO = new Set(['codproduto', 'descricao', 'emba', 'preco_unit', 'preco_tot'])
 // Emitir Pedido de Compra: codproduto, descricao e preco_tot estão disponíveis
-const COLS_VAZIAS_EMITIR = new Set(['emba', 'qtUnit', 'preco_emba', 'preco_emba_st', 'preco_tot_ion', 'preco_tot_ion_st'])
+// CISS não tem EAN — identifica por codproduto. Layout de importação ION:
+// codproduto + quantidade + precoVenda (demais colunas em branco, incl. codembalagem)
+const COLS_VAZIAS_CISS = new Set(['codembalagem', 'descricao', 'emba', 'preco_unit', 'preco_tot', 'preco_emba', 'preco_tot_ion'])
 
 // ── Utilitários ───────────────────────────────────────────────────────────────
 const esc     = s => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
@@ -807,7 +809,8 @@ function extrairCissPedido(paginas) {
           codproduto,
           codembalagem:     getX(its, 331, 20),
           descricao:        desc.str.trim(),
-          quantidade:       normalizarPreco(getX(its, 456, 25)),
+          // Quant. UN. (unidades, x~390) — não Quant. Emb. (caixas, x~456)
+          quantidade:       normalizarPreco(getX(its, 390, 22)),
           precoVenda:       normalizarPreco(getX(its, 427, 25)),
           preco_tot:        normalizarPreco(getX(its, 522, 25)),
           emba:             '',
@@ -1160,12 +1163,13 @@ export async function runConverter(body) {
 
   if (!pedidos.length) throw Object.assign(new Error('Nenhum pedido encontrado no PDF'), { status: 422 })
 
-  // pedido_venda_ion e pedido_compra_validade usam o layout de importação do ION
-  // (COLS_VAZIAS_PEDIDO): só codembalagem (EAN) + quantidade + precoVenda
+  // Layout de importação do ION em todos os formatos:
+  //  - com EAN  (pedido, emitir_pedido, pedido_venda_ion, pedido_compra_validade):
+  //    codembalagem (EAN) + quantidade + precoVenda  → COLS_VAZIAS_PEDIDO
+  //  - sem EAN  (ciss_pedido): codproduto + quantidade + precoVenda → COLS_VAZIAS_CISS
   const colsVazias =
-    formato === 'emitir_pedido'    ? COLS_VAZIAS_EMITIR    :
-    formato === 'ciss_pedido'      ? COLS_VAZIAS_EMITIR    :
-                                     COLS_VAZIAS_PEDIDO
+    formato === 'ciss_pedido' ? COLS_VAZIAS_CISS :
+                                COLS_VAZIAS_PEDIDO
 
   const zip = new JSZip()
   const pedidosComArquivos = pedidos.map(p => {
