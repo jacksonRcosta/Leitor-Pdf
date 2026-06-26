@@ -79,6 +79,7 @@ function detectarFormato(text) {
   if (/emitir\s+pedido\s+de\s+compra/i.test(text))    return 'emitir_pedido'
   if (/pedidos de compra por periodo/i.test(text))     return 'ciss_pedido'
   if (/PEDIDO DE VENDA/i.test(text) && /ION Sistemas/i.test(text)) return 'pedido_venda_ion'
+  if (/Validade Pedido/i.test(text) && /N[°º]\s*PEDIDO:/i.test(text)) return 'pedido_compra_validade'
   return 'generico'
 }
 
@@ -145,6 +146,86 @@ function extrairPedidoVendaIon(text, paginas) {
       preco_tot_ion:    '',
       preco_tot_ion_st: '',
     })
+  }
+
+  return pedido.itens.length ? [pedido] : []
+}
+
+// ── Parser G: Pedido de Compra (layout "Validade Pedido") ─────────────────────
+// ERP externo (ex.: cliente Supermercados São Luiz → fornecedor Asa Branca).
+// Cada item ocupa 2 linhas Y adjacentes:
+//   Linha superior: codForn(x40–72) | codProduto(x80–104) | EAN(x104–160) | NCM | descrição(x195–410)
+//   Linha inferior: Emb.Compra(x415–460) | Qtd.emEmb(x460–499) | Qtd.Unid(x499–540) |
+//                   R$Unit.NF(x540–575) | R$Unit.Líquido(x690–725) | R$Total.Líquido(x725–772)
+// ION casa por EAN + quantidade (Qtd.Unid em unidades) → usa COLS_VAZIAS_PEDIDO.
+function extrairPedidoCompraValidade(text, paginas) {
+  const mEmpresa = text.match(/(\d{2,5})\s*-\s*([^\n]+?Ltda[^\n]*)/i)
+  // 1º "CNPJ:" do documento = empresa compradora (cliente). No texto reconstruído
+  // o CNPJ fica colado à I.E. seguinte, então capturamos por comprimento limitado.
+  const mCnpj    = text.match(/CNPJ:\s*([\d.\/\-]{13,18})/)
+  const cnpjRaw  = (mCnpj?.[1] || '').replace(/\D/g, '').slice(0, 14).padStart(14, '0')
+  const mPedido  = text.match(/N[°º]\s*PEDIDO:\s*(\d+)/i)
+  const mEmitido = text.match(/Emitido em:\s*(\d{2}\/\d{2}\/\d{4})/i)
+  // No texto reconstruído a data precede o rótulo: "01/07/2026Dt Prevista Entrega:"
+  const mEntrega = text.match(/(\d{2}\/\d{2}\/\d{4})Dt Prevista Entrega:/i)
+
+  const pedido = {
+    razao_social:   mEmpresa ? `${mEmpresa[1]} - ${mEmpresa[2].trim()}` : '',
+    cnpj_formatado: fmtCNPJ(cnpjRaw),
+    cnpj_numerico:  cnpjRaw,
+    loja:           mEmpresa?.[1] || cnpjRaw.slice(-6),
+    num_pedido:     mPedido?.[1] || '',
+    data_compra:    mEmitido?.[1] || '',
+    data_entrega:   mEntrega?.[1] || '',
+    vencimentos:    '',
+    itens:          [],
+  }
+
+  // Processa cada página isoladamente (Y se repete entre páginas)
+  for (const pagina of paginas) {
+    const porY = new Map()
+    for (const i of pagina) {
+      if (!porY.has(i.y)) porY.set(i.y, [])
+      porY.get(i.y).push(i)
+    }
+    const ys = [...porY.keys()].sort((a, b) => b - a)
+    const get = (linha, a, b) => linha.filter(i => i.x >= a && i.x < b)
+      .sort((x, y) => x.x - y.x).map(i => i.str).join('').trim()
+
+    for (let k = 0; k < ys.length; k++) {
+      const top  = porY.get(ys[k])
+      const desc = get(top, 195, 410)
+      const ean  = get(top, 104, 160)
+      const cod  = get(top, 80, 104)
+      // Linha de item: descrição + EAN (12–14 díg.) + código de produto
+      if (!desc || !/^\d{12,14}$/.test(ean) || !/^\d{4,6}$/.test(cod)) continue
+
+      // Linha inferior: próximo Y (≤3px) que contenha a coluna Emb. Compra
+      let bot = null
+      for (let j = k + 1; j < ys.length && ys[k] - ys[j] <= 3; j++) {
+        if (get(porY.get(ys[j]), 415, 460)) { bot = porY.get(ys[j]); break }
+      }
+
+      const qtdUnid = bot ? get(bot, 499, 540) : ''
+      const quantidade = qtdUnid.split(',')[0].replace(/\./g, '') // "144,000" → "144"
+
+      pedido.itens.push({
+        codproduto:       cod,
+        codembalagem:     ean,
+        quantidade:       quantidade,
+        descricao:        desc,
+        emba:             bot ? get(bot, 415, 460) : '',
+        qtUnit:           '',
+        precoVenda:       bot ? normalizarPreco(get(bot, 540, 575)) : '', // R$ Unit. NF
+
+        preco_emba:       '',
+        preco_emba_st:    '',
+        preco_unit:       bot ? normalizarPreco(get(bot, 690, 725)) : '',
+        preco_tot:        bot ? normalizarPreco(get(bot, 725, 772)) : '',
+        preco_tot_ion:    '',
+        preco_tot_ion_st: '',
+      })
+    }
   }
 
   return pedido.itens.length ? [pedido] : []
@@ -1073,6 +1154,7 @@ export async function runConverter(body) {
     formato === 'emitir_pedido'    ? extrairEmitirPedido(paginas)         :
     formato === 'ciss_pedido'      ? extrairCissPedido(paginas)           :
     formato === 'pedido_venda_ion' ? extrairPedidoVendaIon(text, paginas) :
+    formato === 'pedido_compra_validade' ? extrairPedidoCompraValidade(text, paginas) :
                                      extrairPedidos(text)
 
   if (!pedidos.length) throw Object.assign(new Error('Nenhum pedido encontrado no PDF'), { status: 422 })
