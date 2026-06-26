@@ -120,9 +120,12 @@ function extrairPedidoVendaIon(text, paginas) {
 
   for (const y of ys) {
     const linha = todosItens.filter(i => i.y === y)
-    const seq = linha.filter(i => i.x < 64).map(i => i.str).join('').trim()
-    const cod = linha.filter(i => i.x >= 64 && i.x < 104).map(i => i.str).join('').trim()
-    if (!/^\d+$/.test(seq) || !/^\d{6,7}$/.test(cod)) continue
+    // seq (#) fica em x~34; o COD. do produto varia entre x60 e x64 conforme o
+    // nº de dígitos — fronteira em x50 evita absorver o COD no seq (bug em PDFs
+    // com código de 8 dígitos iniciando em x60). COD aceita 6–8 dígitos.
+    const seq = linha.filter(i => i.x < 50).map(i => i.str).join('').trim()
+    const cod = linha.filter(i => i.x >= 50 && i.x < 104).map(i => i.str).join('').trim()
+    if (!/^\d+$/.test(seq) || !/^\d{6,8}$/.test(cod)) continue
 
     const desc     = linha.filter(i => i.x >= 104 && i.x < 485).map(i => i.str).join('').trim()
     const emba     = linha.filter(i => i.x >= 485 && i.x < 537).map(i => i.str).join('').trim()
