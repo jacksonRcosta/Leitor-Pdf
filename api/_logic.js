@@ -28,8 +28,6 @@ const XLS_KEYS = [
 const COLS_VAZIAS_PEDIDO = new Set(['codproduto', 'descricao', 'emba', 'preco_unit', 'preco_tot'])
 // Emitir Pedido de Compra: codproduto, descricao e preco_tot estão disponíveis
 const COLS_VAZIAS_EMITIR = new Set(['emba', 'qtUnit', 'preco_emba', 'preco_emba_st', 'preco_tot_ion', 'preco_tot_ion_st'])
-// Pedido de Venda ION: codproduto, codembalagem, quantidade, descricao, emba, preco_unit, preco_tot disponíveis
-const COLS_VAZIAS_ION_VENDA = new Set(['qtUnit', 'precoVenda', 'preco_emba', 'preco_emba_st', 'preco_tot_ion', 'preco_tot_ion_st'])
 
 // ── Utilitários ───────────────────────────────────────────────────────────────
 const esc     = s => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
@@ -141,7 +139,7 @@ function extrairPedidoVendaIon(text, paginas) {
       descricao:        desc,
       emba:             emba || 'UN',
       qtUnit:           '',
-      precoVenda:       '',
+      precoVenda:       normalizarPreco(precoUn), // preço de venda = R$ Unit.
       preco_emba:       '',
       preco_emba_st:    '',
       preco_unit:       normalizarPreco(precoUn),
@@ -1162,10 +1160,11 @@ export async function runConverter(body) {
 
   if (!pedidos.length) throw Object.assign(new Error('Nenhum pedido encontrado no PDF'), { status: 422 })
 
+  // pedido_venda_ion e pedido_compra_validade usam o layout de importação do ION
+  // (COLS_VAZIAS_PEDIDO): só codembalagem (EAN) + quantidade + precoVenda
   const colsVazias =
     formato === 'emitir_pedido'    ? COLS_VAZIAS_EMITIR    :
     formato === 'ciss_pedido'      ? COLS_VAZIAS_EMITIR    :
-    formato === 'pedido_venda_ion' ? COLS_VAZIAS_ION_VENDA :
                                      COLS_VAZIAS_PEDIDO
 
   const zip = new JSZip()
