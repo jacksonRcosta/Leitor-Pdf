@@ -80,6 +80,7 @@ function detectarFormato(text) {
   if (/pedidos de compra por periodo/i.test(text))     return 'ciss_pedido'
   if (/PEDIDO DE VENDA/i.test(text) && /ION Sistemas/i.test(text)) return 'pedido_venda_ion'
   if (/Validade Pedido/i.test(text) && /N[°º]\s*PEDIDO:/i.test(text)) return 'pedido_compra_validade'
+  if (/Ordem de Compra\s*N[°º]/i.test(text))          return 'ordem_compra'
   return 'generico'
 }
 
@@ -225,6 +226,90 @@ function extrairPedidoCompraValidade(text, paginas) {
         preco_emba_st:    '',
         preco_unit:       bot ? normalizarPreco(get(bot, 690, 725)) : '',
         preco_tot:        bot ? normalizarPreco(get(bot, 725, 772)) : '',
+        preco_tot_ion:    '',
+        preco_tot_ion_st: '',
+      })
+    }
+  }
+
+  return pedido.itens.length ? [pedido] : []
+}
+
+// ── Parser H: Ordem de Compra (layout transposto) ─────────────────────────────
+// Ordem de Compra emitida por cliente → fornecedor Asa Branca (ex.: COMERCIAL JOMART).
+// PECULIARIDADE: o pdf-parse extrai este layout de forma TRANSPOSTA — cada item
+// ocupa uma COLUNA X própria (x230, x244, x257... espaçadas ~13px) e cada campo é
+// uma FAIXA Y fixa. A âncora de item é a linha de EAN (Y≈114–124): "<EAN>  <CX|UN>".
+// Para cada âncora, casa-se o valor mais próximo em X (tol 8px) dentro de cada faixa Y.
+// Faixas Y (por página): codInterno 8–25 | codForn 60–70 | EAN 114–124 |
+//   descrição 235–246 | Pedido Embal 493–500 | Pedido Unid 529–546 |
+//   valores 571–583 ("semST R$comST R$bruto R$desc R$líquido").
+// ION casa por EAN + Pedido Unid + precoVenda (Valor com ST) → COLS_VAZIAS_PEDIDO.
+function extrairOrdemCompra(text, paginas) {
+  const mPedido  = text.match(/Ordem de Compra\s*N[°º]\s*(\d+)/i)
+  const mEmitido = text.match(/Emitido em:\s*(\d{2}\/\d{2}\/\d{4})/i)
+  // "Dias p/ Entrega" → "2 - 04/07/2026": a data de entrega é a última do bloco
+  const mEntrega = text.match(/-\s*(\d{2}\/\d{2}\/\d{4})/)
+
+  // CNPJ comprador (emitente): dentre os CNPJs do documento, o do bloco EMITENTE
+  // fica na base da página (menor Y); o do FORNECEDOR (Asa Branca) fica acima.
+  const RE_CNPJ = /\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/
+  let cnpjRaw = ''
+  if (paginas[0]) {
+    const cands = paginas[0].filter(i => RE_CNPJ.test(i.str)).sort((a, b) => a.y - b.y)
+    if (cands.length) cnpjRaw = cands[0].str.match(RE_CNPJ)[0].replace(/\D/g, '')
+  }
+  if (!cnpjRaw) cnpjRaw = (extrairPrimeiroCnpj(text)?.numerico) || ''
+
+  const pedido = {
+    razao_social:   '',
+    cnpj_formatado: fmtCNPJ(cnpjRaw),
+    cnpj_numerico:  cnpjRaw,
+    loja:           mPedido?.[1] || cnpjRaw.slice(-6),
+    num_pedido:     mPedido?.[1] || '',
+    data_compra:    mEmitido?.[1] || '',
+    data_entrega:   mEntrega?.[1] || '',
+    vencimentos:    '',
+    itens:          [],
+  }
+
+  for (const pagina of paginas) {
+    // x>=228 isola as colunas de itens dos rótulos/cabeçalho (x<228)
+    const banda   = (a, b) => pagina.filter(i => i.y >= a && i.y < b && i.x >= 228)
+    const nearest = (arr, xRef) => {
+      let best = null, bd = Infinity
+      for (const i of arr) { const d = Math.abs(i.x - xRef); if (d <= 8 && d < bd) { best = i; bd = d } }
+      return best ? best.str.trim() : ''
+    }
+
+    const bEan  = banda(114, 124), bDesc = banda(235, 246)
+    const bUnid = banda(529, 546), bVal  = banda(571, 583), bForn = banda(60, 70)
+
+    const anchors = bEan
+      .filter(i => /^\d{12,14}\s+\w+/.test(i.str))
+      .map(i => { const m = i.str.match(/^(\d{12,14})\s+(\w+)/); return { x: i.x, ean: m[1], emb: m[2] } })
+
+    for (const a of anchors) {
+      const desc = nearest(bDesc, a.x)
+      const unid = nearest(bUnid, a.x).split(',')[0].replace(/\./g, '')
+      // valores: "7,337   R$ 7,99   R$ 176,09   R$ 0,00   R$ 191,74"
+      const vals = nearest(bVal, a.x).replace(/R\$/g, '|').split('|').map(s => s.trim()).filter(Boolean)
+      const comST = vals[1] || '', liquido = vals[4] || ''
+
+      if (!desc && !unid) continue
+
+      pedido.itens.push({
+        codproduto:       nearest(bForn, a.x), // Código Fornecedor (Asa Branca)
+        codembalagem:     a.ean,
+        quantidade:       unid,                // Pedido Unid (unidades)
+        descricao:        desc,
+        emba:             a.emb || 'UN',
+        qtUnit:           '',
+        precoVenda:       normalizarPreco(comST),   // Valor com ST (unitário)
+        preco_emba:       '',
+        preco_emba_st:    '',
+        preco_unit:       normalizarPreco(comST),
+        preco_tot:        normalizarPreco(liquido), // Valor Total Líquido
         preco_tot_ion:    '',
         preco_tot_ion_st: '',
       })
@@ -1159,6 +1244,7 @@ export async function runConverter(body) {
     formato === 'ciss_pedido'      ? extrairCissPedido(paginas)           :
     formato === 'pedido_venda_ion' ? extrairPedidoVendaIon(text, paginas) :
     formato === 'pedido_compra_validade' ? extrairPedidoCompraValidade(text, paginas) :
+    formato === 'ordem_compra'     ? extrairOrdemCompra(text, paginas)    :
                                      extrairPedidos(text)
 
   if (!pedidos.length) throw Object.assign(new Error('Nenhum pedido encontrado no PDF'), { status: 422 })
